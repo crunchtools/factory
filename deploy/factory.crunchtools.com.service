@@ -1,0 +1,20 @@
+[Unit]
+Description=Podman container - factory.crunchtools.com (Fleet Watchdog)
+Wants=network-online.target
+After=network-online.target zabbix.crunchtools.com.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStartPre=/usr/bin/sleep 1.5
+ExecStart=/usr/bin/podman run --memory=512m --memory-swap=512m -i --rm \
+    --name factory.crunchtools.com \
+    --network=host \
+    --env-file /srv/factory.crunchtools.com/factory.env \
+    quay.io/crunchtools/factory:latest
+ExecStop=/usr/bin/podman stop -t 10 factory.crunchtools.com
+ExecStopPost=/usr/bin/podman rm -f factory.crunchtools.com
+
+[Install]
+WantedBy=multi-user.target
