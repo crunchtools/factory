@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """CrunchTools fleet watchdog — checks repos, sends results to Zabbix trapper.
 
-Monitors 14 repos across 4 dimensions:
+Monitors 14 repos across 5 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP repos)
   4. Constitution validation (all repos with constitutions)
+  5. Open GitHub issues (all repos)
 
 Results are pushed to Zabbix via the trapper (ZBXD) protocol.
 
@@ -300,6 +301,21 @@ def check_constitution(repo: str) -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
+# Check 5: Open GitHub Issues
+# ---------------------------------------------------------------------------
+
+def check_open_issues(repo: str) -> int:
+    """Return count of open issues for a repo."""
+    data = gh_api(
+        f"repos/crunchtools/{repo}/issues?state=open&per_page=100"
+    )
+    if not data or not isinstance(data, list):
+        return 0
+    # GitHub API returns PRs in the issues endpoint — filter them out
+    return sum(1 for issue in data if "pull_request" not in issue)
+
+
+# ---------------------------------------------------------------------------
 # Zabbix trapper protocol
 # ---------------------------------------------------------------------------
 
@@ -392,6 +408,13 @@ def main() -> int:
             print(f"    {violations[:200]}")
         add_item(f"fleet.constitution[{repo}]", score)
         add_item(f"fleet.constitution.violations[{repo}]", violations)
+
+    # --- Check 5: Open Issues (all repos) ---
+    print("\n--- Open Issues ---")
+    for repo in REPOS:
+        count = check_open_issues(repo)
+        print(f"  {repo}: {count}")
+        add_item(f"fleet.issues.open[{repo}]", count)
 
     # --- Send to Zabbix ---
     print(f"\n--- Sending {len(trapper_items)} items to Zabbix ---")
