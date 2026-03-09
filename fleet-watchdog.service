@@ -1,0 +1,6 @@
+[Unit]
+Description=Fleet watchdog check
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fleet-watchdog

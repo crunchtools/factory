@@ -1,7 +1,7 @@
 # factory Constitution
 
 > **Version:** 1.0.0
-> **Ratified:** 2026-03-08
+> **Ratified:** 2026-03-09
 > **Status:** Active
 > **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.0.0
 > **Profile:** Container Image
@@ -20,7 +20,7 @@ Follow Semantic Versioning 2.0.0. MAJOR/MINOR/PATCH.
 
 ## Base Image
 
-`quay.io/hummingbird/python:3` — lightweight Python runtime. No systemd; uses entrypoint loop for periodic execution.
+`registry.access.redhat.com/ubi10/ubi-init:latest` — systemd-based for timer-driven periodic execution.
 
 ## Registry
 
@@ -30,26 +30,30 @@ Published to `quay.io/crunchtools/factory`.
 
 - Uses `Containerfile` (not Dockerfile)
 - Required LABELs: `org.opencontainers.image.source`, `org.opencontainers.image.description`, `org.opencontainers.image.licenses`, `maintainer`
-- Installs `gh` CLI binary via Python tarfile (Hummingbird lacks dnf/tar)
-- Runs as non-root user (UID 1001)
-- No RHSM registration needed (Hummingbird base, not UBI)
+- `dnf install -y --nodocs` followed by `dnf clean all`
+- systemd timer enabled: fleet-watchdog.timer (15-minute OnCalendar)
+- systemd services masked: systemd-remount-fs, systemd-update-done, systemd-udev-trigger
+- `STOPSIGNAL SIGRTMIN+3` for proper systemd shutdown
+- `ENTRYPOINT ["/sbin/init"]`
 
 ## Packages Installed
 
-- gh CLI (GitHub CLI, installed from upstream binary release)
-- Python 3 stdlib only (no pip dependencies)
+- python3 (from UBI repos)
+- gh CLI (from upstream GitHub RPM repo)
 
 ## Runtime
 
-- Entrypoint: `/usr/local/bin/entrypoint.sh` (sleep loop, default 900s interval)
-- Main script: `/usr/local/bin/fleet-watchdog` (Python)
+- Init: `/sbin/init` (systemd)
+- Timer: `fleet-watchdog.timer` (fires every 15 minutes)
+- Service: `fleet-watchdog.service` (Type=oneshot)
+- Main script: `/usr/local/bin/fleet-watchdog` (Python, stdlib only)
 - Constitution validator: `/usr/local/lib/validate-constitution.py`
-- Environment variables: `GH_TOKEN` (required), `ZABBIX_SERVER`, `ZABBIX_PORT`, `WATCHDOG_INTERVAL`
+- Environment variables: `GH_TOKEN` (required), `ZABBIX_SERVER`, `ZABBIX_PORT`
 
 ## Testing
 
 - **Build test**: CI builds the Containerfile on every push to main
-- **Smoke test**: Run container with `GH_TOKEN`, verify check output on stdout
+- **Smoke test**: Run container with `GH_TOKEN`, verify timer fires and check output in journal
 - **Security scan**: Recommended (not yet implemented)
 
 ## Quality Gates

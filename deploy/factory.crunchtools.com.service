@@ -8,7 +8,7 @@ Type=simple
 Restart=always
 RestartSec=10
 ExecStartPre=/usr/bin/sleep 1.5
-ExecStart=/usr/bin/podman run --memory=512m --memory-swap=512m -i --rm \
+ExecStart=/usr/bin/podman run --memory=512m --memory-swap=512m -i --rm --systemd=always \
     --name factory.crunchtools.com \
     --network=host \
     --env-file /srv/factory.crunchtools.com/factory.env \
