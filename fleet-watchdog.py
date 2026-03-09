@@ -190,13 +190,29 @@ def check_version_sync(repo: str) -> tuple[int, str]:
 # Check 3: Artifact Sync (MCP repos only)
 # ---------------------------------------------------------------------------
 
+SEMVER_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
+
+
+def is_semver_tag(name: str) -> bool:
+    """Return True if name looks like a semver version (with or without v prefix)."""
+    return bool(SEMVER_RE.match(name.lstrip("v")))
+
+
 def get_github_release_version(repo: str) -> str | None:
-    """Get the latest GitHub release tag (strip leading 'v')."""
+    """Get the latest version — try GitHub Release first, fall back to git tag."""
     data = gh_api(f"repos/crunchtools/{repo}/releases/latest")
-    if not data:
-        return None
-    tag = data.get("tag_name", "")
-    return tag.lstrip("v") if tag else None
+    if data and "tag_name" in data:
+        tag = data["tag_name"]
+        return tag.lstrip("v") if tag else None
+
+    # No releases — fall back to latest semver git tag
+    tags = gh_api(f"repos/crunchtools/{repo}/tags?per_page=10")
+    if tags and isinstance(tags, list):
+        for tag in tags:
+            name = tag.get("name", "")
+            if is_semver_tag(name):
+                return name.lstrip("v")
+    return None
 
 
 def get_pypi_version(repo: str) -> str | None:
@@ -213,57 +229,74 @@ def get_pypi_version(repo: str) -> str | None:
 
 
 def get_quay_latest_tag(repo: str) -> str | None:
-    """Get the latest non-'latest' tag from Quay.io."""
-    url = f"https://quay.io/api/v1/repository/crunchtools/{repo}/tag/?limit=10&onlyActiveTags=true"
+    """Get the latest 3-part semver tag from Quay.io (skip 'latest', 'main', short tags)."""
+    url = f"https://quay.io/api/v1/repository/crunchtools/{repo}/tag/?limit=20&onlyActiveTags=true"
     try:
         req = urllib.request.Request(url, headers={"Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=15) as resp:
             data = json.loads(resp.read())
             tags = data.get("tags", [])
+            # Prefer 3-part semver (X.Y.Z) over short (X.Y)
             for tag in tags:
-                name = tag.get("name", "")
-                if name and name != "latest":
-                    return name.lstrip("v")
+                name = tag.get("name", "").lstrip("v")
+                if re.match(r"^\d+\.\d+\.\d+$", name):
+                    return name
+            # Fall back to 2-part if no 3-part found
+            for tag in tags:
+                name = tag.get("name", "").lstrip("v")
+                if re.match(r"^\d+\.\d+$", name):
+                    return name
             return None
     except Exception:
         return None
 
 
 def get_ghcr_latest_tag(repo: str) -> str | None:
-    """Get the latest tag from GHCR via GitHub API."""
+    """Get the latest semver tag from GHCR via GitHub API."""
     data = gh_api(
-        f"orgs/crunchtools/packages/container/{repo}/versions?per_page=5"
+        f"orgs/crunchtools/packages/container/{repo}/versions?per_page=10"
     )
     if not data or not isinstance(data, list):
         return None
     for version in data:
         tags = version.get("metadata", {}).get("container", {}).get("tags", [])
         for tag in tags:
-            if tag and tag != "latest":
+            if is_semver_tag(tag):
                 return tag.lstrip("v")
     return None
 
 
-def check_artifact_sync(repo: str) -> int:
-    """Return 1 if GitHub release, PyPI, Quay, and GHCR versions all match."""
+def check_artifact_sync(repo: str) -> tuple[int, str]:
+    """Return (1, summary) if versions match, (0, details) otherwise.
+
+    Compares GitHub release/tag, PyPI, and Quay.io. GHCR is included only
+    if it has a semver tag (many repos only push 'latest'+'main' to GHCR).
+    """
     gh_ver = get_github_release_version(repo)
     pypi_ver = get_pypi_version(repo)
     quay_ver = get_quay_latest_tag(repo)
     ghcr_ver = get_ghcr_latest_tag(repo)
 
-    versions = {
+    # Core trio: GitHub + PyPI + Quay must all match
+    versions: dict[str, str | None] = {
         "github": gh_ver,
         "pypi": pypi_ver,
         "quay": quay_ver,
-        "ghcr": ghcr_ver,
     }
+    # Include GHCR only if it has a real semver tag
+    if ghcr_ver:
+        versions["ghcr"] = ghcr_ver
 
     found = {k: v for k, v in versions.items() if v is not None}
     if not found:
-        return 0
+        return 0, "no versions found"
 
     unique = set(found.values())
-    return 1 if len(unique) == 1 else 0
+    detail = ", ".join(f"{k}={v}" for k, v in found.items())
+    if len(unique) == 1:
+        return 1, next(iter(unique))
+    else:
+        return 0, f"mismatch: {detail}"
 
 
 # ---------------------------------------------------------------------------
@@ -393,9 +426,9 @@ def main() -> int:
     # --- Check 3: Artifact Sync (MCP repos only) ---
     print("\n--- Artifact Sync ---")
     for repo in MCP_REPOS:
-        score = check_artifact_sync(repo)
+        score, artifact_info = check_artifact_sync(repo)
         status = "OK" if score == 1 else "FAIL"
-        print(f"  {repo}: {status}")
+        print(f"  {repo}: {status} ({artifact_info})")
         add_item(f"fleet.artifact.sync[{repo}]", score)
 
     # --- Check 4: Constitution Validation (all repos) ---
