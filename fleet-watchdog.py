@@ -252,7 +252,11 @@ def get_quay_latest_tag(repo: str) -> str | None:
 
 
 def get_ghcr_latest_tag(repo: str) -> str | None:
-    """Get the latest semver tag from GHCR via GitHub API."""
+    """Get the latest 3-part semver tag from GHCR via GitHub API.
+
+    Prefers 3-part (X.Y.Z) over 2-part (X.Y) tags since both may exist
+    on the same image and we need to match the full version elsewhere.
+    """
     data = gh_api(
         f"orgs/crunchtools/packages/container/{repo}/versions?per_page=10"
     )
@@ -261,8 +265,15 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
     for version in data:
         tags = version.get("metadata", {}).get("container", {}).get("tags", [])
         for tag in tags:
-            if is_semver_tag(tag):
-                return tag.lstrip("v")
+            name = tag.lstrip("v")
+            if re.match(r"^\d+\.\d+\.\d+$", name):
+                return name
+    for version in data:
+        tags = version.get("metadata", {}).get("container", {}).get("tags", [])
+        for tag in tags:
+            name = tag.lstrip("v")
+            if re.match(r"^\d+\.\d+$", name):
+                return name
     return None
 
 
