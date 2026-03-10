@@ -3,5 +3,5 @@ Description=Fleet watchdog check
 
 [Service]
 Type=oneshot
-PassEnvironment=GH_TOKEN ZABBIX_SERVER ZABBIX_PORT
+PassEnvironment=GH_TOKEN ZABBIX_SERVER ZABBIX_PORT ZABBIX_API_URL ZABBIX_API_TOKEN
 ExecStart=/usr/local/bin/fleet-watchdog

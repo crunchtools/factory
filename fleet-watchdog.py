@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """CrunchTools fleet watchdog — checks repos, sends results to Zabbix trapper.
 
-Monitors 15 repos across 5 dimensions:
+Monitors 15 repos across 6 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP repos)
   4. Constitution validation (all repos with constitutions)
   5. Open GitHub issues (all repos)
+  6. Zabbix item coverage (all expected trapper keys exist on host)
 
 Results are pushed to Zabbix via the trapper (ZBXD) protocol.
 
@@ -28,6 +29,8 @@ from pathlib import Path
 ZABBIX_HOST = "factory.crunchtools.com"
 ZABBIX_SERVER = os.environ.get("ZABBIX_SERVER", "127.0.0.1")
 ZABBIX_PORT = int(os.environ.get("ZABBIX_PORT", "10051"))
+ZABBIX_API_URL = os.environ.get("ZABBIX_API_URL", "")
+ZABBIX_API_TOKEN = os.environ.get("ZABBIX_API_TOKEN", "")
 
 # All 15 repos to monitor
 REPOS = [
@@ -362,6 +365,95 @@ def check_open_issues(repo: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Check 6: Zabbix Item Coverage
+# ---------------------------------------------------------------------------
+
+def get_expected_zabbix_keys() -> set[str]:
+    """Build the full set of trapper item keys the watchdog expects in Zabbix."""
+    keys: set[str] = set()
+    for repo in REPOS:
+        keys.add(f"fleet.gha[{repo}]")
+        keys.add(f"fleet.constitution[{repo}]")
+        keys.add(f"fleet.constitution.violations[{repo}]")
+        keys.add(f"fleet.issues.open[{repo}]")
+    for repo in MCP_REPOS:
+        keys.add(f"fleet.version.sync[{repo}]")
+        keys.add(f"fleet.version[{repo}]")
+        keys.add(f"fleet.artifact.sync[{repo}]")
+    return keys
+
+
+def zabbix_api_call(method: str, params: dict) -> dict | None:
+    """Make a Zabbix JSON-RPC API call. Returns result or None on error."""
+    if not ZABBIX_API_URL or not ZABBIX_API_TOKEN:
+        return None
+    payload = json.dumps({
+        "jsonrpc": "2.0",
+        "method": method,
+        "params": params,
+        "id": 1,
+    }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json-rpc",
+        "Authorization": f"Bearer {ZABBIX_API_TOKEN}",
+    }
+    try:
+        req = urllib.request.Request(ZABBIX_API_URL, data=payload, headers=headers)
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read())
+        if "error" in data:
+            msg = data["error"].get("data", data["error"].get("message", ""))
+            print(f"  WARN: Zabbix API error: {msg}", file=sys.stderr)
+            return None
+        return data.get("result")
+    except Exception as e:
+        print(f"  WARN: Zabbix API unreachable: {e}", file=sys.stderr)
+        return None
+
+
+def get_zabbix_item_keys() -> set[str] | None:
+    """Query Zabbix API for all fleet.* item keys on the watchdog host."""
+    hosts = zabbix_api_call("host.get", {
+        "filter": {"host": [ZABBIX_HOST]},
+        "output": ["hostid"],
+    })
+    if not hosts:
+        return None
+    host_id = hosts[0]["hostid"]
+
+    items = zabbix_api_call("item.get", {
+        "hostids": host_id,
+        "output": ["key_"],
+        "search": {"key_": "fleet."},
+        "startSearch": True,
+    })
+    if items is None:
+        return None
+    return {item["key_"] for item in items}
+
+
+def check_zabbix_coverage() -> tuple[int, list[str]]:
+    """Return (1, []) if all expected items exist, (0, missing_keys) otherwise.
+
+    Returns (1, []) with a skip message printed if API is not configured.
+    """
+    if not ZABBIX_API_URL or not ZABBIX_API_TOKEN:
+        print("  SKIP: Set ZABBIX_API_URL and ZABBIX_API_TOKEN to enable")
+        return 1, []
+
+    expected = get_expected_zabbix_keys()
+    existing = get_zabbix_item_keys()
+    if existing is None:
+        print("  WARN: Could not query Zabbix API, skipping coverage check")
+        return 1, []
+
+    missing = sorted(expected - existing)
+    if missing:
+        return 0, missing
+    return 1, []
+
+
+# ---------------------------------------------------------------------------
 # Zabbix trapper protocol
 # ---------------------------------------------------------------------------
 
@@ -461,6 +553,20 @@ def main() -> int:
         count = check_open_issues(repo)
         print(f"  {repo}: {count}")
         add_item(f"fleet.issues.open[{repo}]", count)
+
+    # --- Check 6: Zabbix Item Coverage ---
+    print("\n--- Zabbix Item Coverage ---")
+    zabbix_ok, missing_keys = check_zabbix_coverage()
+    if missing_keys:
+        print(f"  WARN: {len(missing_keys)} trapper items missing from Zabbix host:")
+        for key in missing_keys:
+            print(f"    - {key}")
+        print("  These items need to be created in Zabbix as trapper items")
+
+    elif zabbix_ok:
+        expected_count = len(get_expected_zabbix_keys())
+        if ZABBIX_API_URL and ZABBIX_API_TOKEN:
+            print(f"  OK: All {expected_count} expected items exist")
 
     # --- Send to Zabbix ---
     print(f"\n--- Sending {len(trapper_items)} items to Zabbix ---")
