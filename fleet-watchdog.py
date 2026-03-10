@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CrunchTools fleet watchdog — checks repos, sends results to Zabbix trapper.
 
-Monitors 14 repos across 5 dimensions:
+Monitors 15 repos across 5 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP repos)
@@ -29,8 +29,9 @@ ZABBIX_HOST = "factory.crunchtools.com"
 ZABBIX_SERVER = os.environ.get("ZABBIX_SERVER", "127.0.0.1")
 ZABBIX_PORT = int(os.environ.get("ZABBIX_PORT", "10051"))
 
-# All 14 repos to monitor
+# All 15 repos to monitor
 REPOS = [
+    "mcp-airlock",
     "mcp-cloudflare",
     "mcp-feed-reader",
     "mcp-gemini",
@@ -49,6 +50,7 @@ REPOS = [
 
 # Subset: MCP server repos (version sync + artifact sync apply)
 MCP_REPOS = [
+    "mcp-airlock",
     "mcp-cloudflare",
     "mcp-feed-reader",
     "mcp-gemini",
