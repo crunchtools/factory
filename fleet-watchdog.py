@@ -364,6 +364,16 @@ def check_open_issues(repo: str) -> int:
     return sum(1 for issue in data if "pull_request" not in issue)
 
 
+def check_open_prs(repo: str) -> int:
+    """Return count of open pull requests for a repo."""
+    data = gh_api(
+        f"repos/crunchtools/{repo}/pulls?state=open&per_page=100"
+    )
+    if not data or not isinstance(data, list):
+        return 0
+    return len(data)
+
+
 # ---------------------------------------------------------------------------
 # Check 6: Zabbix Item Coverage
 # ---------------------------------------------------------------------------
@@ -376,6 +386,7 @@ def get_expected_zabbix_keys() -> set[str]:
         keys.add(f"fleet.constitution[{repo}]")
         keys.add(f"fleet.constitution.violations[{repo}]")
         keys.add(f"fleet.issues.open[{repo}]")
+        keys.add(f"fleet.prs.open[{repo}]")
     for repo in MCP_REPOS:
         keys.add(f"fleet.version.sync[{repo}]")
         keys.add(f"fleet.version[{repo}]")
@@ -547,12 +558,18 @@ def main() -> int:
         add_item(f"fleet.constitution[{repo}]", score)
         add_item(f"fleet.constitution.violations[{repo}]", violations)
 
-    # --- Check 5: Open Issues (all repos) ---
+    # --- Check 5: Open Issues & PRs (all repos) ---
     print("\n--- Open Issues ---")
     for repo in REPOS:
         count = check_open_issues(repo)
         print(f"  {repo}: {count}")
         add_item(f"fleet.issues.open[{repo}]", count)
+
+    print("\n--- Open Pull Requests ---")
+    for repo in REPOS:
+        count = check_open_prs(repo)
+        print(f"  {repo}: {count}")
+        add_item(f"fleet.prs.open[{repo}]", count)
 
     # --- Check 6: Zabbix Item Coverage ---
     print("\n--- Zabbix Item Coverage ---")
