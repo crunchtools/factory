@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""CrunchTools fleet watchdog — checks repos, sends results to Zabbix trapper.
+"""CrunchTools factory watchdog — checks repos, sends results to Zabbix trapper.
 
 Monitors 15 repos across 6 dimensions:
   1. GHA workflow status (all repos)
@@ -382,15 +382,15 @@ def get_expected_zabbix_keys() -> set[str]:
     """Build the full set of trapper item keys the watchdog expects in Zabbix."""
     keys: set[str] = set()
     for repo in REPOS:
-        keys.add(f"fleet.gha[{repo}]")
-        keys.add(f"fleet.constitution[{repo}]")
-        keys.add(f"fleet.constitution.violations[{repo}]")
-        keys.add(f"fleet.issues.open[{repo}]")
-        keys.add(f"fleet.prs.open[{repo}]")
+        keys.add(f"factory.gha[{repo}]")
+        keys.add(f"factory.constitution[{repo}]")
+        keys.add(f"factory.constitution.violations[{repo}]")
+        keys.add(f"factory.issues.open[{repo}]")
+        keys.add(f"factory.prs.open[{repo}]")
     for repo in MCP_REPOS:
-        keys.add(f"fleet.version.sync[{repo}]")
-        keys.add(f"fleet.version[{repo}]")
-        keys.add(f"fleet.artifact.sync[{repo}]")
+        keys.add(f"factory.version.sync[{repo}]")
+        keys.add(f"factory.version[{repo}]")
+        keys.add(f"factory.artifact.sync[{repo}]")
     return keys
 
 
@@ -423,7 +423,7 @@ def zabbix_api_call(method: str, params: dict) -> dict | None:
 
 
 def get_zabbix_item_keys() -> set[str] | None:
-    """Query Zabbix API for all fleet.* item keys on the watchdog host."""
+    """Query Zabbix API for all factory.* item keys on the watchdog host."""
     hosts = zabbix_api_call("host.get", {
         "filter": {"host": [ZABBIX_HOST]},
         "output": ["hostid"],
@@ -435,7 +435,7 @@ def get_zabbix_item_keys() -> set[str] | None:
     items = zabbix_api_call("item.get", {
         "hostids": host_id,
         "output": ["key_"],
-        "search": {"key_": "fleet."},
+        "search": {"key_": "factory."},
         "startSearch": True,
     })
     if items is None:
@@ -519,7 +519,7 @@ def main() -> int:
         })
 
     print("=" * 60)
-    print("CrunchTools Fleet Watchdog")
+    print("CrunchTools Factory Watchdog")
     print("=" * 60)
 
     # --- Check 1: GHA Status (all repos) ---
@@ -528,7 +528,7 @@ def main() -> int:
         score = check_gha_status(repo)
         status = "OK" if score == 1 else "FAIL"
         print(f"  {repo}: {status}")
-        add_item(f"fleet.gha[{repo}]", score)
+        add_item(f"factory.gha[{repo}]", score)
 
     # --- Check 2: Version Sync (MCP repos only) ---
     print("\n--- Version Sync ---")
@@ -536,8 +536,8 @@ def main() -> int:
         score, version_info = check_version_sync(repo)
         status = "OK" if score == 1 else "FAIL"
         print(f"  {repo}: {status} ({version_info})")
-        add_item(f"fleet.version.sync[{repo}]", score)
-        add_item(f"fleet.version[{repo}]", version_info)
+        add_item(f"factory.version.sync[{repo}]", score)
+        add_item(f"factory.version[{repo}]", version_info)
 
     # --- Check 3: Artifact Sync (MCP repos only) ---
     print("\n--- Artifact Sync ---")
@@ -545,7 +545,7 @@ def main() -> int:
         score, artifact_info = check_artifact_sync(repo)
         status = "OK" if score == 1 else "FAIL"
         print(f"  {repo}: {status} ({artifact_info})")
-        add_item(f"fleet.artifact.sync[{repo}]", score)
+        add_item(f"factory.artifact.sync[{repo}]", score)
 
     # --- Check 4: Constitution Validation (all repos) ---
     print("\n--- Constitution Validation ---")
@@ -555,21 +555,21 @@ def main() -> int:
         print(f"  {repo}: {status}")
         if violations:
             print(f"    {violations[:200]}")
-        add_item(f"fleet.constitution[{repo}]", score)
-        add_item(f"fleet.constitution.violations[{repo}]", violations)
+        add_item(f"factory.constitution[{repo}]", score)
+        add_item(f"factory.constitution.violations[{repo}]", violations)
 
     # --- Check 5: Open Issues & PRs (all repos) ---
     print("\n--- Open Issues ---")
     for repo in REPOS:
         count = check_open_issues(repo)
         print(f"  {repo}: {count}")
-        add_item(f"fleet.issues.open[{repo}]", count)
+        add_item(f"factory.issues.open[{repo}]", count)
 
     print("\n--- Open Pull Requests ---")
     for repo in REPOS:
         count = check_open_prs(repo)
         print(f"  {repo}: {count}")
-        add_item(f"fleet.prs.open[{repo}]", count)
+        add_item(f"factory.prs.open[{repo}]", count)
 
     # --- Check 6: Zabbix Item Coverage ---
     print("\n--- Zabbix Item Coverage ---")

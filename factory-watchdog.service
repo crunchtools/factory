@@ -1,7 +1,7 @@
 [Unit]
-Description=Fleet watchdog check
+Description=Factory watchdog check
 
 [Service]
 Type=oneshot
 PassEnvironment=GH_TOKEN ZABBIX_SERVER ZABBIX_PORT ZABBIX_API_URL ZABBIX_API_TOKEN
-ExecStart=/usr/local/bin/fleet-watchdog
+ExecStart=/usr/local/bin/factory-watchdog

@@ -1,5 +1,5 @@
 [Unit]
-Description=Fleet watchdog - every 15 minutes
+Description=Factory watchdog - every 15 minutes
 
 [Timer]
 OnCalendar=*:0/15
