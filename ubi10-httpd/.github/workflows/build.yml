@@ -1,0 +1,156 @@
+name: Build, Test, and Push Container Image
+
+on:
+  push:
+    branches: [main, master]
+  repository_dispatch:
+    types: [parent-image-updated]
+  workflow_dispatch:
+  schedule:
+    - cron: '15 4 * * 1'
+
+env:
+  REGISTRY: quay.io
+  IMAGE_NAME: crunchtools/ubi10-httpd
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=
+
+      - name: Build image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Containerfile
+          push: false
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Save image as tarball
+        run: docker save ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest -o /tmp/image.tar
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: container-image
+          path: /tmp/image.tar
+          retention-days: 1
+
+  test:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Install Podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman
+
+      - name: Load image
+        run: podman load -i /tmp/image.tar
+
+      - name: Start container
+        run: |
+          podman run -d --name test-container \
+            --systemd=always \
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Wait for httpd
+        run: |
+          echo "Waiting for httpd to start..."
+          for i in $(seq 1 30); do
+            if podman exec test-container systemctl is-active httpd >/dev/null 2>&1; then
+              echo "httpd is up after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Run smoke tests
+        run: |
+          podman cp tests/smoke-test.sh test-container:/tmp/smoke-test.sh
+          podman exec test-container chmod +x /tmp/smoke-test.sh
+          podman exec test-container /tmp/smoke-test.sh
+
+      - name: Cleanup
+        if: always()
+        run: podman rm -f test-container
+
+  push:
+    runs-on: ubuntu-latest
+    needs: test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Download image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: container-image
+          path: /tmp
+
+      - name: Load image
+        run: docker load -i /tmp/image.tar
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Push image
+        run: |
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          SHA_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:$(echo ${{ github.sha }} | cut -c1-7)"
+          docker tag ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest "$SHA_TAG" || true
+          docker push "$SHA_TAG" || true
+
+      - name: Trigger downstream rebuilds
+        env:
+          GH_TOKEN: ${{ secrets.CRUNCHTOOLS_DISPATCH_TOKEN }}
+        run: |
+          for repo in ubi10-httpd-php ubi10-httpd-perl proxy; do
+            gh api repos/crunchtools/$repo/dispatches \
+              -f event_type=parent-image-updated || true
+          done
+
+  validate-constitution:
+    name: Constitution Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: crunchtools/constitution
+          path: .constitution
+
+      - name: Validate constitution
+        run: python3 .constitution/validate-constitution.py .specify/memory/constitution.md --verbose
