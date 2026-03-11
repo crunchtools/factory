@@ -551,7 +551,11 @@ def check_tcp(port: int, host: str = "127.0.0.1", timeout: int = 5) -> bool:
 
 
 def check_process(container: str, pattern: str) -> int:
-    """Check process count inside a container. Returns count (0 = not running)."""
+    """Check process count inside a container. Returns count (0 = not running).
+
+    Requires podman on the host. Returns -1 if podman is not available
+    (e.g., running inside a container without host podman access).
+    """
     # Try pgrep first
     try:
         result = subprocess.run(
@@ -561,6 +565,8 @@ def check_process(container: str, pattern: str) -> int:
         if result.returncode != 127:
             count = result.stdout.strip()
             return int(count) if count.isdigit() else 0
+    except FileNotFoundError:
+        return -1  # podman not available
     except (subprocess.TimeoutExpired, subprocess.SubprocessError):
         return 0
 
@@ -575,7 +581,7 @@ def check_process(container: str, pattern: str) -> int:
             count = sum(1 for line in lines if pattern in line)
             if count > 0:
                 return count
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
 
     # Fallback: plain podman top (minimal images)
@@ -587,7 +593,7 @@ def check_process(container: str, pattern: str) -> int:
         if result.returncode == 0:
             lines = result.stdout.strip().split("\n")[1:]
             return sum(1 for line in lines if pattern in line)
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError):
+    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
         pass
 
     return 0
@@ -633,6 +639,9 @@ def run_live_checks(repos: list[dict]) -> list[dict]:
                 label = f"TCP :{check['port']}"
             elif check_type == "process":
                 count = check_process(container, check["pattern"])
+                if count == -1:
+                    # podman not available — skip process checks entirely
+                    continue
                 ok = count > 0
                 label = f"Process: {check['pattern']}"
             else:
