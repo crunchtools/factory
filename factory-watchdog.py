@@ -30,6 +30,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -528,12 +529,19 @@ def check_zabbix_coverage() -> tuple[int, list[str]]:
 # ---------------------------------------------------------------------------
 
 def check_http(port: int, host: str = "127.0.0.1", timeout: int = 10) -> bool:
-    """Check if an HTTP service responds on the given port."""
+    """Check if an HTTP service responds on the given port.
+
+    Any HTTP response (including 401, 403, 404) means the service is up.
+    Only connection failures and 5xx errors count as down.
+    """
     try:
         url = f"http://{host}:{port}/"
         req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.status < 500
+    except urllib.error.HTTPError as e:
+        # 4xx = service is up, just rejecting the request
+        return e.code < 500
     except Exception:
         return False
 
