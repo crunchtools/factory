@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """CrunchTools factory watchdog — checks repos, sends results to Zabbix trapper.
 
-Monitors 15 repos across 6 dimensions:
+Monitors 23 repos across 6 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP repos)
@@ -32,8 +32,9 @@ ZABBIX_PORT = int(os.environ.get("ZABBIX_PORT", "10051"))
 ZABBIX_API_URL = os.environ.get("ZABBIX_API_URL", "")
 ZABBIX_API_TOKEN = os.environ.get("ZABBIX_API_TOKEN", "")
 
-# All 15 repos to monitor
+# All 23 repos to monitor
 REPOS = [
+    # MCP servers
     "mcp-airlock",
     "mcp-cloudflare",
     "mcp-feed-reader",
@@ -44,11 +45,22 @@ REPOS = [
     "mcp-request-tracker",
     "mcp-wordpress",
     "mcp-workboard",
+    # Infrastructure
     "constitution",
     "find-mcp-server",
     "openclaw",
-    "ubi10-httpd-perl",
+    # Container image tree
+    "ubi10-core",
+    "ubi10-httpd",
     "ubi10-httpd-php",
+    "ubi10-httpd-php-mariadb",
+    "ubi10-httpd-php-postgres",
+    "ubi10-httpd-perl",
+    "ubi10-httpd-perl-mariadb",
+    "proxy",
+    "rt",
+    # Application images (tier 4)
+    "zabbix",
 ]
 
 # Subset: MCP server repos (version sync + artifact sync apply)
