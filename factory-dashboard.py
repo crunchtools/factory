@@ -2,8 +2,11 @@
 """CrunchTools factory dashboard — serves status page on port 8095.
 
 Reads /data/factory-status.json (written by factory-watchdog) and renders
-a dark-themed ASCII tree dashboard. Designed to be embedded in Zabbix as
-a URL widget.
+a dark-themed ASCII tree dashboard showing software delivery health.
+
+Live service monitoring is handled by Zabbix natively — this dashboard
+focuses exclusively on software delivery: GHA, version sync, artifact
+sync, constitution compliance, and open issues/PRs.
 
 No pip dependencies — stdlib only.
 """
@@ -110,11 +113,6 @@ a:hover {{
 <div class="section-title">Software Delivery</div>
 <pre>{software_tree}</pre>
 </div>
-
-<div class="section">
-<div class="section-title">Live Services</div>
-<pre>{services_tree}</pre>
-</div>
 </body>
 </html>
 """
@@ -168,7 +166,6 @@ def render_software_tree(data: dict) -> str:
         for ri, (name, info) in enumerate(repos_in_profile):
             is_last_repo = (ri == len(repos_in_profile) - 1)
             repo_branch = "\u2514" if is_last_repo else "\u251c"
-            repo_cont = " " if is_last_repo else "\u2502"
 
             # Determine repo health
             healthy = info.get("healthy", True)
@@ -215,44 +212,6 @@ def render_software_tree(data: dict) -> str:
     return "\n".join(lines)
 
 
-def render_services_tree(data: dict) -> str:
-    """Render the live services tree."""
-    services = data.get("services", [])
-    if not services:
-        return span("dim", "(no live service checks configured)")
-
-    # Group by repo
-    by_repo: dict[str, list[dict]] = {}
-    for svc in services:
-        repo = svc.get("repo", "unknown")
-        by_repo.setdefault(repo, []).append(svc)
-
-    lines = []
-    repo_names = sorted(by_repo.keys())
-    for ri, repo in enumerate(repo_names):
-        checks = by_repo[repo]
-        is_last = (ri == len(repo_names) - 1)
-        branch = "\u2514" if is_last else "\u251c"
-        cont = " " if is_last else "\u2502"
-
-        all_ok = all(c["ok"] for c in checks)
-        container = checks[0].get("container", "")
-        lines.append(f"{branch}\u2500\u2500 {status_dot(all_ok)}  {repo}  {span('dim', container)}")
-
-        for ci, check in enumerate(checks):
-            is_last_check = (ci == len(checks) - 1)
-            check_branch = "\u2514" if is_last_check else "\u251c"
-
-            ok = check.get("ok", False)
-            desc = check.get("desc", "")
-            label = check.get("check", "")
-            lines.append(
-                f"{cont}  {check_branch}\u2500\u2500 {status_dot(ok)}  {desc}  {span('dim', label)}"
-            )
-
-    return "\n".join(lines)
-
-
 def render_page(data: dict | None) -> str:
     """Render the full HTML dashboard page."""
     if data is None:
@@ -260,7 +219,6 @@ def render_page(data: dict | None) -> str:
             meta="Status file not found. Waiting for first watchdog run...",
             summary=span("warn", "No data available"),
             software_tree=span("dim", "(waiting for factory-watchdog)"),
-            services_tree=span("dim", "(waiting for factory-watchdog)"),
         )
 
     # Meta
@@ -285,8 +243,6 @@ def render_page(data: dict | None) -> str:
     health = s.get("health", 0)
     repos_total = s.get("repos_total", 0)
     repos_healthy = s.get("repos_healthy", 0)
-    services_total = s.get("services_total", 0)
-    services_failing = s.get("services_failing", 0)
 
     if health == 1:
         health_str = span("ok", "HEALTHY")
@@ -296,7 +252,6 @@ def render_page(data: dict | None) -> str:
     summary_parts = [
         f"Status: {health_str}",
         f"Repos: {span('ok' if repos_healthy == repos_total else 'warn', f'{repos_healthy}/{repos_total}')}",
-        f"Services: {span('ok' if services_failing == 0 else 'fail', f'{services_total - services_failing}/{services_total}')}",
     ]
 
     # Show specific failure counts if any
@@ -319,7 +274,6 @@ def render_page(data: dict | None) -> str:
         meta=meta,
         summary=summary,
         software_tree=render_software_tree(data),
-        services_tree=render_services_tree(data),
     )
 
 
@@ -351,7 +305,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.wfile.write(html.encode())
 
     def log_message(self, format, *args):
-        # Quiet logging — one line per request
         print(f"{self.address_string()} {args[0]}", flush=True)
 
 

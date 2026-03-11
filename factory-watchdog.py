@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """CrunchTools factory watchdog — auto-discovers repos, runs checks, serves status.
 
-Monitors all crunchtools repos that have a constitution across 7 dimensions:
+Monitors all crunchtools repos that have a constitution across 6 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP Server repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP Server repos)
   4. Constitution validation (all repos with constitutions)
   5. Open GitHub issues & PRs (all repos)
   6. Zabbix item coverage (summary items exist on host)
-  7. Live service health (Web Application repos — HTTP, TCP, process checks)
 
 Repos are auto-discovered from the GitHub org. Any repo with a constitution
 at .specify/memory/constitution.md is monitored. The constitution's Profile
 header determines which checks apply.
 
+Live service monitoring (HTTP, TCP, process checks) is handled by Zabbix
+natively — factory does not duplicate that.
+
 Results are:
   - Written to /data/factory-status.json (consumed by factory-dashboard)
-  - Pushed to Zabbix as ~10 summary trapper items (for alerting)
+  - Pushed to Zabbix as 8 summary trapper items (for alerting)
 
 No pip dependencies — stdlib only + gh CLI.
 """
@@ -30,7 +32,6 @@ import struct
 import subprocess
 import sys
 import tempfile
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,66 +49,6 @@ VALIDATOR_PATH = "/usr/local/lib/validate-constitution.py"
 # PyPI package names follow the pattern mcp-{name}-crunchtools
 PYPI_PREFIX = "mcp-"
 PYPI_SUFFIX = "-crunchtools"
-
-# Fallback live service registry for repos whose constitutions don't have
-# machine-parseable monitoring sections yet. Keyed by repo name.
-# Each entry: list of check dicts with type, port/pattern, container, description.
-# Host-side port mappings from proxy.crunchtools.com.conf:
-#   acquacotta  -> 8080    rotv        -> 8082    crunchtools -> 8083
-#   rt          -> 8084    learn       -> 8085    test        -> 8086
-#   test.rotv   -> 8087    immich      -> 8088    us          -> 8089
-#   zabbix      -> 8090    spanish     -> 8091    postiz      -> 8092
-#   newsletter  -> 8093    proxy       -> 443(SSL)
-LIVE_SERVICES = {
-    "acquacotta": {
-        "container": "acquacotta.crunchtools.com",
-        "checks": [
-            {"type": "http", "port": 8080, "desc": "Acquacotta (Flask/Gunicorn)"},
-        ],
-    },
-    "rotv": {
-        "container": "rootsofthevalley.org",
-        "checks": [
-            {"type": "http", "port": 8082, "desc": "Roots of the Valley (Node.js)"},
-        ],
-    },
-    "immich": {
-        "container": "images.rootsofthevalley.org",
-        "checks": [
-            {"type": "http", "port": 8088, "desc": "Immich (photo manager)"},
-        ],
-    },
-    "zabbix": {
-        "container": "zabbix.crunchtools.com",
-        "checks": [
-            {"type": "http", "port": 8090, "desc": "Zabbix web"},
-        ],
-    },
-    "postiz": {
-        "container": "postiz.crunchtools.com",
-        "checks": [
-            {"type": "http", "port": 8092, "desc": "Postiz (social media)"},
-        ],
-    },
-    "rt": {
-        "container": "rt.fatherlinux.com",
-        "checks": [
-            {"type": "http", "port": 8084, "desc": "Request Tracker"},
-        ],
-    },
-    "proxy": {
-        "container": "proxy.crunchtools.com",
-        "checks": [
-            {"type": "tcp", "port": 443, "desc": "Apache proxy (SSL)"},
-        ],
-    },
-    "newsletter": {
-        "container": "newsletter.crunchtools.com",
-        "checks": [
-            {"type": "http", "port": 8093, "desc": "Kill the Newsletter"},
-        ],
-    },
-}
 
 
 # ---------------------------------------------------------------------------
@@ -460,8 +401,6 @@ SUMMARY_KEYS = [
     "factory.constitution.failing",
     "factory.version.failing",
     "factory.artifact.failing",
-    "factory.services.total",
-    "factory.services.failing",
 ]
 
 
@@ -522,148 +461,6 @@ def check_zabbix_coverage() -> tuple[int, list[str]]:
     if missing:
         return 0, missing
     return 1, []
-
-
-# ---------------------------------------------------------------------------
-# Check 7: Live Service Health
-# ---------------------------------------------------------------------------
-
-def check_http(port: int, host: str = "127.0.0.1", timeout: int = 10) -> bool:
-    """Check if an HTTP service responds on the given port.
-
-    Any HTTP response (including 401, 403, 404) means the service is up.
-    Only connection failures and 5xx errors count as down.
-    """
-    try:
-        url = f"http://{host}:{port}/"
-        req = urllib.request.Request(url)
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status < 500
-    except urllib.error.HTTPError as e:
-        # 4xx = service is up, just rejecting the request
-        return e.code < 500
-    except Exception:
-        return False
-
-
-def check_tcp(port: int, host: str = "127.0.0.1", timeout: int = 5) -> bool:
-    """Check if a TCP port is accepting connections."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(timeout)
-            sock.connect((host, port))
-            return True
-    except Exception:
-        return False
-
-
-def check_process(container: str, pattern: str) -> int:
-    """Check process count inside a container. Returns count (0 = not running).
-
-    Requires podman on the host. Returns -1 if podman is not available
-    (e.g., running inside a container without host podman access).
-    """
-    # Try pgrep first
-    try:
-        result = subprocess.run(
-            ["podman", "exec", container, "pgrep", "-c", pattern],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode != 127:
-            count = result.stdout.strip()
-            return int(count) if count.isdigit() else 0
-    except FileNotFoundError:
-        return -1  # podman not available
-    except (subprocess.TimeoutExpired, subprocess.SubprocessError):
-        return 0
-
-    # Fallback: podman top -o args
-    try:
-        result = subprocess.run(
-            ["podman", "top", container, "-o", "args"],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().split("\n")[1:]
-            count = sum(1 for line in lines if pattern in line)
-            if count > 0:
-                return count
-    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        pass
-
-    # Fallback: plain podman top (minimal images)
-    try:
-        result = subprocess.run(
-            ["podman", "top", container],
-            capture_output=True, text=True, timeout=10,
-        )
-        if result.returncode == 0:
-            lines = result.stdout.strip().split("\n")[1:]
-            return sum(1 for line in lines if pattern in line)
-    except (FileNotFoundError, subprocess.TimeoutExpired, subprocess.SubprocessError):
-        pass
-
-    return 0
-
-
-def run_live_checks(repos: list[dict]) -> list[dict]:
-    """Run live service checks for Web Application repos.
-
-    Returns list of service check results:
-        {
-            "repo": "acquacotta",
-            "container": "acquacotta.crunchtools.com",
-            "check": "HTTP :80",
-            "type": "http",
-            "ok": True/False,
-        }
-    """
-    results = []
-
-    # Build set of repos that are Web Application profile
-    web_repos = {r["name"] for r in repos if r["profile"] == "Web Application"}
-
-    # Also check repos in LIVE_SERVICES even if not Web Application profile
-    # (e.g., zabbix, postiz, rt are infrastructure but have live services)
-    check_repos = web_repos | set(LIVE_SERVICES.keys())
-
-    for repo_name in sorted(check_repos):
-        svc = LIVE_SERVICES.get(repo_name)
-        if not svc:
-            continue
-
-        container = svc["container"]
-        for check in svc["checks"]:
-            check_type = check["type"]
-            desc = check["desc"]
-            ok = False
-
-            if check_type == "http":
-                ok = check_http(check["port"])
-                label = f"HTTP :{check['port']}"
-            elif check_type == "tcp":
-                ok = check_tcp(check["port"])
-                label = f"TCP :{check['port']}"
-            elif check_type == "process":
-                count = check_process(container, check["pattern"])
-                if count == -1:
-                    # podman not available — skip process checks entirely
-                    continue
-                ok = count > 0
-                label = f"Process: {check['pattern']}"
-            else:
-                continue
-
-            results.append({
-                "repo": repo_name,
-                "container": container,
-                "check": label,
-                "desc": desc,
-                "type": check_type,
-                "ok": ok,
-            })
-
-    return results
 
 
 # ---------------------------------------------------------------------------
@@ -733,7 +530,6 @@ def main() -> int:
 
     repo_names = [r["name"] for r in repos]
     mcp_repos = [r["name"] for r in repos if r["profile"] == "MCP Server"]
-    web_repos = [r["name"] for r in repos if r["profile"] == "Web Application"]
 
     # Per-repo results accumulator
     repo_results: dict[str, dict] = {}
@@ -811,15 +607,7 @@ def main() -> int:
     elif zabbix_ok and ZABBIX_API_URL and ZABBIX_API_TOKEN:
         print(f"  OK: All {len(SUMMARY_KEYS)} summary items exist")
 
-    # --- Check 7: Live Service Health ---
-    print("\n--- Live Service Health ---")
-    service_results = run_live_checks(repos)
-    for svc in service_results:
-        status = "OK" if svc["ok"] else "FAIL"
-        print(f"  {svc['repo']}/{svc['desc']}: {status} ({svc['check']})")
-
     # --- Compute summary ---
-    # A repo is "healthy" if all its applicable checks pass
     for name, res in repo_results.items():
         healthy = True
         if res["gha"] == 0:
@@ -839,9 +627,7 @@ def main() -> int:
     constitution_failing = sum(1 for r in repo_results.values() if r["constitution"] == 0)
     version_failing = sum(1 for n in mcp_repos if repo_results[n]["version_sync"] == 0)
     artifact_failing = sum(1 for n in mcp_repos if repo_results[n]["artifact_sync"] == 0)
-    services_total = len(service_results)
-    services_failing = sum(1 for s in service_results if not s["ok"])
-    all_healthy = (failing_repos == 0 and services_failing == 0)
+    all_healthy = failing_repos == 0
 
     # --- Write JSON status ---
     status_data = {
@@ -856,11 +642,8 @@ def main() -> int:
             "constitution_failing": constitution_failing,
             "version_failing": version_failing,
             "artifact_failing": artifact_failing,
-            "services_total": services_total,
-            "services_failing": services_failing,
         },
         "repos": repo_results,
-        "services": service_results,
     }
     write_status(status_data)
 
@@ -874,8 +657,6 @@ def main() -> int:
         {"host": ZABBIX_HOST, "key": "factory.constitution.failing", "value": str(constitution_failing)},
         {"host": ZABBIX_HOST, "key": "factory.version.failing", "value": str(version_failing)},
         {"host": ZABBIX_HOST, "key": "factory.artifact.failing", "value": str(artifact_failing)},
-        {"host": ZABBIX_HOST, "key": "factory.services.total", "value": str(services_total)},
-        {"host": ZABBIX_HOST, "key": "factory.services.failing", "value": str(services_failing)},
     ]
 
     print(f"\n--- Sending {len(trapper_items)} summary items to Zabbix ---")
@@ -883,8 +664,7 @@ def main() -> int:
 
     # --- Print summary ---
     print(f"\n{'=' * 60}")
-    print(f"Summary: {healthy_repos}/{total_repos} repos healthy, "
-          f"{services_total - services_failing}/{services_total} services up")
+    print(f"Summary: {healthy_repos}/{total_repos} repos healthy")
     if not all_healthy:
         print("  Issues:")
         if gha_failing:
@@ -895,8 +675,6 @@ def main() -> int:
             print(f"    Version sync failing: {version_failing}")
         if artifact_failing:
             print(f"    Artifact sync failing: {artifact_failing}")
-        if services_failing:
-            print(f"    Services failing: {services_failing}")
     print("Done.")
     return 0
 
