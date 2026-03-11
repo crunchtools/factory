@@ -1,0 +1,12 @@
+[Unit]
+Description=Factory dashboard HTTP server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/bin/factory-dashboard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

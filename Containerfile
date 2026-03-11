@@ -15,9 +15,11 @@ RUN dnf install -y --nodocs 'dnf-command(config-manager)' && \
     dnf clean all
 
 COPY factory-watchdog.py /usr/local/bin/factory-watchdog
+COPY factory-dashboard.py /usr/local/bin/factory-dashboard
 COPY validate-constitution.py /usr/local/lib/validate-constitution.py
 COPY factory-watchdog.service /etc/systemd/system/factory-watchdog.service
 COPY factory-watchdog.timer /etc/systemd/system/factory-watchdog.timer
+COPY factory-dashboard.service /etc/systemd/system/factory-dashboard.service
 
-RUN chmod +x /usr/local/bin/factory-watchdog && \
-    systemctl enable factory-watchdog.timer
+RUN chmod +x /usr/local/bin/factory-watchdog /usr/local/bin/factory-dashboard && \
+    systemctl enable factory-watchdog.timer factory-dashboard.service

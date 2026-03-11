@@ -3,5 +3,5 @@ Description=Factory watchdog check
 
 [Service]
 Type=oneshot
-PassEnvironment=GH_TOKEN ZABBIX_SERVER ZABBIX_PORT ZABBIX_API_URL ZABBIX_API_TOKEN
+PassEnvironment=GH_TOKEN GITHUB_ORG ZABBIX_SERVER ZABBIX_PORT ZABBIX_API_URL ZABBIX_API_TOKEN STATUS_FILE
 ExecStart=/usr/local/bin/factory-watchdog

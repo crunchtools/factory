@@ -11,6 +11,7 @@ ExecStartPre=/usr/bin/sleep 1.5
 ExecStart=/usr/bin/podman run --memory=512m --memory-swap=512m -i --rm --systemd=always \
     --name factory.crunchtools.com \
     --network=host \
+    -v /srv/factory.crunchtools.com/data:/data:Z \
     --env-file /srv/factory.crunchtools.com/factory.env \
     quay.io/crunchtools/factory:latest
 ExecStop=/usr/bin/podman stop -t 10 factory.crunchtools.com
