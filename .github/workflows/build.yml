@@ -3,10 +3,11 @@ name: Build and Push Container Image
 on:
   push:
     branches: [main]
+  repository_dispatch:
+    types: [parent-image-updated]
   workflow_dispatch:
   schedule:
-    # Rebuild weekly to pick up base image updates
-    - cron: '0 6 * * 1'
+    - cron: '15 4 * * 1'
 
 env:
   REGISTRY: quay.io
