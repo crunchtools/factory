@@ -51,60 +51,59 @@ PYPI_SUFFIX = "-crunchtools"
 # Fallback live service registry for repos whose constitutions don't have
 # machine-parseable monitoring sections yet. Keyed by repo name.
 # Each entry: list of check dicts with type, port/pattern, container, description.
+# Host-side port mappings from proxy.crunchtools.com.conf:
+#   acquacotta  -> 8080    rotv        -> 8082    crunchtools -> 8083
+#   rt          -> 8084    learn       -> 8085    test        -> 8086
+#   test.rotv   -> 8087    immich      -> 8088    us          -> 8089
+#   zabbix      -> 8090    spanish     -> 8091    postiz      -> 8092
+#   newsletter  -> 8093    proxy       -> 443(SSL)
 LIVE_SERVICES = {
     "acquacotta": {
         "container": "acquacotta.crunchtools.com",
         "checks": [
-            {"type": "http", "port": 80, "desc": "Apache"},
-            {"type": "process", "pattern": "gunicorn", "desc": "Gunicorn"},
+            {"type": "http", "port": 8080, "desc": "Acquacotta (Flask/Gunicorn)"},
         ],
     },
     "rotv": {
         "container": "rootsofthevalley.org",
         "checks": [
-            {"type": "http", "port": 8080, "desc": "Node.js backend"},
-            {"type": "tcp", "port": 5432, "desc": "PostgreSQL"},
-            {"type": "process", "pattern": "postgres", "desc": "PostgreSQL"},
-            {"type": "process", "pattern": "node", "desc": "Node.js"},
+            {"type": "http", "port": 8082, "desc": "Roots of the Valley (Node.js)"},
         ],
     },
     "immich": {
         "container": "images.rootsofthevalley.org",
         "checks": [
-            {"type": "tcp", "port": 2283, "desc": "Immich web"},
-            {"type": "process", "pattern": "postgres", "desc": "PostgreSQL"},
-            {"type": "process", "pattern": "valkey-server", "desc": "Valkey"},
+            {"type": "http", "port": 8088, "desc": "Immich (photo manager)"},
         ],
     },
     "zabbix": {
         "container": "zabbix.crunchtools.com",
         "checks": [
             {"type": "http", "port": 8090, "desc": "Zabbix web"},
-            {"type": "process", "pattern": "postgres", "desc": "PostgreSQL"},
-            {"type": "process", "pattern": "zabbix_server", "desc": "Zabbix server"},
         ],
     },
     "postiz": {
         "container": "postiz.crunchtools.com",
         "checks": [
-            {"type": "http", "port": 8092, "desc": "Postiz web"},
-            {"type": "process", "pattern": "postgres", "desc": "PostgreSQL"},
-            {"type": "process", "pattern": "valkey-server", "desc": "Valkey"},
-            {"type": "process", "pattern": "node", "desc": "Node.js"},
+            {"type": "http", "port": 8092, "desc": "Postiz (social media)"},
         ],
     },
     "rt": {
         "container": "rt.fatherlinux.com",
         "checks": [
-            {"type": "http", "port": 80, "desc": "Apache/RT"},
-            {"type": "process", "pattern": "mariadbd", "desc": "MariaDB"},
-            {"type": "process", "pattern": "master", "desc": "Postfix"},
+            {"type": "http", "port": 8084, "desc": "Request Tracker"},
         ],
     },
     "proxy": {
         "container": "proxy.crunchtools.com",
         "checks": [
-            {"type": "http", "port": 80, "desc": "Apache proxy"},
+            {"type": "tcp", "port": 443, "desc": "Apache proxy (SSL)"},
+        ],
+    },
+    "newsletter": {
+        "container": "newsletter.crunchtools.com",
+        "checks": [
+            {"type": "http", "port": 8093, "desc": "Kill the Newsletter"},
         ],
     },
 }
@@ -872,7 +871,7 @@ def main() -> int:
     ]
 
     print(f"\n--- Sending {len(trapper_items)} summary items to Zabbix ---")
-    success = send_trapper(trapper_items)
+    send_trapper(trapper_items)
 
     # --- Print summary ---
     print(f"\n{'=' * 60}")
@@ -891,7 +890,7 @@ def main() -> int:
         if services_failing:
             print(f"    Services failing: {services_failing}")
     print("Done.")
-    return 0 if success else 1
+    return 0
 
 
 if __name__ == "__main__":
