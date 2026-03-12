@@ -191,10 +191,11 @@ def check_container_image(text: str) -> list[str]:
         r"ubi\d+",
         r"UBI",
         r"registry\.access\.redhat\.com",
+        r"registry\.redhat\.io",
         r"[Hh]ummingbird",
     ]
     if not any(re.search(p, text) for p in base_image_patterns):
-        violations.append("CONTAINER_IMAGE: No base image declared (UBI or Hummingbird)")
+        violations.append("CONTAINER_IMAGE: No base image declared (UBI, Red Hat registry, or Hummingbird)")
 
     # Registry declared
     if not re.search(r"quay\.io/crunchtools/", text):
