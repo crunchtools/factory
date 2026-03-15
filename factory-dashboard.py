@@ -186,8 +186,8 @@ class FactoryScene extends Phaser.Scene {
         var lines = [
             repo.name, '---',
             'GHA: ' + (repo.gha === 1 ? 'PASS' : repo.gha === 0 ? 'FAIL' : 'n/a'),
-            'Version: ' + (repo.version || 'n/a') +
-                (repo.version_sync === 1 ? ' (synced)' : repo.version_sync === 0 ? ' (MISMATCH)' : ''),
+            'Version: ' + (repo.version_sync === 1 ? (repo.version || 'n/a') + ' (synced)' :
+                repo.version_sync === 0 ? (repo.version || 'MISMATCH') : 'n/a'),
             'Artifacts: ' + (repo.artifact_sync === 1 ? 'synced' : repo.artifact_sync === 0 ? 'MISMATCH' : 'n/a'),
             'Constitution: ' + (repo.constitution === 1 ? 'PASS' : repo.constitution === 0 ? 'FAIL' : 'n/a'),
             'Issues: ' + (repo.issues_open || 0) + '  PRs: ' + (repo.prs_open || 0)
@@ -544,11 +544,18 @@ class FactoryScene extends Phaser.Scene {
             fontFamily: '"Cascadia Code", monospace', fontSize: '10px', color: '#e0e0e0', fontStyle: 'bold'
         }).setOrigin(0.5, 0));
 
-        if (repo.version && /^\\d/.test(repo.version)) {
-            this.factoryContainer.add(this.add.text(x + w / 2, y + 21, 'v' + repo.version, {
-                fontFamily: 'monospace', fontSize: '8px',
-                color: repo.version_sync === 1 ? '#00ff88' : '#ff6666'
-            }).setOrigin(0.5, 0));
+        if (repo.version) {
+            var dispVer = repo.version;
+            if (!/^\\d/.test(dispVer)) {
+                var m = dispVer.match(/(\\d+\\.\\d+\\.\\d+)/);
+                dispVer = m ? m[1] + '!' : null;
+            }
+            if (dispVer) {
+                this.factoryContainer.add(this.add.text(x + w / 2, y + 21, 'v' + dispVer, {
+                    fontFamily: 'monospace', fontSize: '8px',
+                    color: repo.version_sync === 1 ? '#00ff88' : '#ff6666'
+                }).setOrigin(0.5, 0));
+            }
         }
 
         var gates = [
