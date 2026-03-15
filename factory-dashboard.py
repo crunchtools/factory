@@ -13,6 +13,7 @@ No pip dependencies — stdlib only.  Phaser 3 loaded from CDN.
 
 import json
 import os
+import subprocess
 import sys
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from pathlib import Path
@@ -72,6 +73,7 @@ class FactoryScene extends Phaser.Scene {
         this.createFilterBar();
         this.createLegend();
         this.createSoundToggle();
+        this.createScanButton();
         this.loadData();
 
         this.time.addEvent({
@@ -286,6 +288,50 @@ class FactoryScene extends Phaser.Scene {
             self.soundEnabled = !self.soundEnabled;
             if (self.soundEnabled) { self.initAudio(); self.soundBtn.setText('[SND]'); self.soundBtn.setColor('#00d4ff'); }
             else { self.soundBtn.setText('[MUTE]'); self.soundBtn.setColor('#555555'); }
+        });
+    }
+
+    createScanButton() {
+        this.scanBtn = this.add.text(this.scale.width - 170, 52, '[SCAN NOW]', {
+            fontFamily: 'monospace', fontSize: '9px', color: '#555555', padding: { x: 4, y: 2 }
+        }).setInteractive({ useHandCursor: true });
+        this.hudContainer.add(this.scanBtn);
+        this.scanCooldown = false;
+        var self = this;
+        this.scanBtn.on('pointerup', function() {
+            if (self.scanCooldown) return;
+            self.scanCooldown = true;
+            self.scanBtn.setText('[SCANNING...]');
+            self.scanBtn.setColor('#ffaa00');
+            self.scanBtn.disableInteractive();
+            var oldTimestamp = self.factoryData ? self.factoryData.timestamp : null;
+            fetch('/api/refresh').then(function() {
+                var pollCount = 0;
+                var poll = self.time.addEvent({
+                    delay: 5000, loop: true,
+                    callback: function() {
+                        pollCount++;
+                        fetch('/api/status').then(function(r) { return r.json(); })
+                        .then(function(data) {
+                            if ((data.timestamp && data.timestamp !== oldTimestamp) || pollCount >= 24) {
+                                poll.remove();
+                                var oldData = self.factoryData;
+                                self.factoryData = data;
+                                self.buildFactory(oldData);
+                                self.updateHUD();
+                                self.showRefreshFlash();
+                                self.scanBtn.setText('[SCAN NOW]');
+                                self.scanBtn.setColor('#00ff88');
+                                self.time.delayedCall(2000, function() {
+                                    self.scanBtn.setColor('#555555');
+                                    self.scanBtn.setInteractive({ useHandCursor: true });
+                                    self.scanCooldown = false;
+                                });
+                            }
+                        });
+                    }
+                });
+            });
         });
     }
 
@@ -664,6 +710,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             self.wfile.write(json.dumps(data or {}).encode())
+            return
+
+        if self.path == "/api/refresh":
+            subprocess.Popen(
+                ["systemctl", "start", "factory-watchdog.service"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            self.send_response(202)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"status":"triggered"}')
             return
 
         # Default: serve game dashboard
