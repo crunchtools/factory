@@ -501,6 +501,17 @@ def send_trapper(items: list[dict[str, str]]) -> bool:
 # JSON status output
 # ---------------------------------------------------------------------------
 
+def load_status() -> dict | None:
+    """Load the existing status JSON file."""
+    path = Path(STATUS_FILE)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
 def write_status(status: dict) -> None:
     """Write status to JSON file atomically."""
     status_path = Path(STATUS_FILE)
@@ -522,11 +533,27 @@ def main() -> int:
     print("CrunchTools Factory Watchdog")
     print("=" * 60)
 
+    # Parse --only flag for selective scanning
+    only_repos: set[str] | None = None
+    for arg in sys.argv[1:]:
+        if arg.startswith("--only="):
+            only_repos = set(arg[len("--only="):].split(","))
+            print(f"Selective scan: {', '.join(sorted(only_repos))}")
+
     # --- Auto-discover repos ---
     repos = discover_repos()
     if not repos:
         print("ERROR: No repos discovered, aborting", file=sys.stderr)
         return 1
+
+    # Load existing status for merging when doing selective scan
+    existing_status = None
+    if only_repos:
+        existing_status = load_status()
+        repos = [r for r in repos if r["name"] in only_repos]
+        if not repos:
+            print("No matching repos found for --only filter")
+            return 1
 
     repo_names = [r["name"] for r in repos]
     mcp_repos = [r["name"] for r in repos if r["profile"] == "MCP Server"]
@@ -619,6 +646,13 @@ def main() -> int:
         if res["artifact_sync"] == 0:
             healthy = False
         res["healthy"] = healthy
+
+    # Merge selective scan results into existing status
+    if only_repos and existing_status and existing_status.get("repos"):
+        merged = dict(existing_status["repos"])
+        merged.update(repo_results)
+        repo_results = merged
+        mcp_repos = [n for n, r in repo_results.items() if r["profile"] == "MCP Server"]
 
     total_repos = len(repo_results)
     healthy_repos = sum(1 for r in repo_results.values() if r["healthy"])

@@ -301,11 +301,12 @@ class FactoryScene extends Phaser.Scene {
         this.scanBtn.on('pointerup', function() {
             if (self.scanCooldown) return;
             self.scanCooldown = true;
-            self.scanBtn.setText('[SCANNING...]');
             self.scanBtn.setColor('#ffaa00');
             self.scanBtn.disableInteractive();
             var oldTimestamp = self.factoryData ? self.factoryData.timestamp : null;
-            fetch('/api/refresh').then(function() {
+            fetch('/api/refresh').then(function(r) { return r.json(); }).then(function(resp) {
+                var label = resp.repos === 'all' ? 'ALL' : resp.repos.length;
+                self.scanBtn.setText('[SCANNING ' + label + '...]');
                 var pollCount = 0;
                 var poll = self.time.addEvent({
                     delay: 5000, loop: true,
@@ -713,14 +714,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         if self.path == "/api/refresh":
+            # Find currently failing repos and only re-scan those
+            status = load_status()
+            failing = []
+            if status and status.get("repos"):
+                failing = [
+                    name for name, info in status["repos"].items()
+                    if not info.get("healthy", True)
+                ]
+            if failing:
+                cmd = [
+                    "/usr/bin/python3", "/usr/local/bin/factory-watchdog",
+                    "--only=" + ",".join(failing),
+                ]
+            else:
+                cmd = ["systemctl", "start", "factory-watchdog.service"]
             subprocess.Popen(
-                ["systemctl", "start", "factory-watchdog.service"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
             self.send_response(202)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"status":"triggered"}')
+            resp = {"status": "triggered", "repos": failing or "all"}
+            self.wfile.write(json.dumps(resp).encode())
             return
 
         # Default: serve game dashboard
