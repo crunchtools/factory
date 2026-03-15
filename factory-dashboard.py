@@ -590,8 +590,21 @@ class FactoryScene extends Phaser.Scene {
         g.fillStyle(lc, la); g.fillCircle(gateX, lineY + 28, 5);
         this.factoryContainer.add(g);
 
-        this.factoryContainer.add(this.add.text(gateX, lineY + 112, label, {
-            fontFamily: 'monospace', fontSize: '9px', color: '#555555'
+        var labelBg = this.add.graphics();
+        var fullLabels = { 'GHA': 'GitHub Actions', 'VER': 'Version Sync', 'ART': 'Artifact Sync', 'CON': 'Constitution' };
+        var fullLabel = fullLabels[label] || label;
+        var lt = this.add.text(gateX, lineY + 26, label, {
+            fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: '#cccccc', fontStyle: 'bold'
+        }).setOrigin(0.5, 0.5);
+        var lbW = lt.width + 12, lbH = lt.height + 6;
+        labelBg.fillStyle(0x0a0a2e, 0.85);
+        labelBg.fillRoundedRect(gateX - lbW / 2, lineY + 26 - lbH / 2, lbW, lbH, 3);
+        labelBg.lineStyle(1, lc, 0.4);
+        labelBg.strokeRoundedRect(gateX - lbW / 2, lineY + 26 - lbH / 2, lbW, lbH, 3);
+        this.factoryContainer.add(labelBg);
+        this.factoryContainer.add(lt);
+        this.factoryContainer.add(this.add.text(gateX, lineY + 113, fullLabel, {
+            fontFamily: 'monospace', fontSize: '9px', color: '#777777'
         }).setOrigin(0.5, 0));
 
         var zone = this.add.zone(gateX, lineY + 70, gapH * 2 + pW * 2, pH + 20)
@@ -682,7 +695,7 @@ class FactoryScene extends Phaser.Scene {
                             ld.gateXPositions, pd.dockX, ld.lineY, gen, ld.org
                         );
                     });
-                })(line.packages[pi], pi * 100, line);
+                })(line.packages[pi], pi * 200, line);
             }
         }
     }
@@ -694,7 +707,7 @@ class FactoryScene extends Phaser.Scene {
         if (gIdx >= gateKeys.length) {
             var self2 = this;
             this.tweens.add({
-                targets: pkg, x: dockX, duration: 500, ease: 'Power1',
+                targets: pkg, x: dockX, duration: 800, ease: 'Power1',
                 onComplete: function() {
                     self2.showPackageShipped(pkg);
                     self2.playSound('chime');
@@ -711,7 +724,7 @@ class FactoryScene extends Phaser.Scene {
 
         var self = this;
         this.tweens.add({
-            targets: pkg, x: gateX, duration: 600, ease: 'Power2',
+            targets: pkg, x: gateX, duration: 1200, ease: 'Power2',
             onComplete: function() {
                 if (self.animGeneration !== gen) return;
                 self.playSound('clunk');
@@ -720,7 +733,7 @@ class FactoryScene extends Phaser.Scene {
                     if (val === 1) {
                         self.playSound('ding');
                         self.flashGate(gateX, lineY, true);
-                        self.time.delayedCall(150, function() {
+                        self.time.delayedCall(300, function() {
                             self.animatePackageThroughGate(
                                 pkg, repo, gIdx + 1, gateXPos, dockX, lineY, gen, org
                             );
@@ -739,7 +752,7 @@ class FactoryScene extends Phaser.Scene {
         var beam = this.add.rectangle(gateX, lineY + 35, 50, 2, 0x00d4ff, 0.6);
         this.factoryContainer.add(beam);
         this.tweens.add({
-            targets: beam, y: lineY + 105, alpha: 0, duration: 200,
+            targets: beam, y: lineY + 105, alpha: 0, duration: 400,
             onComplete: function() { beam.destroy(); if (cb) cb(); }
         });
     }
