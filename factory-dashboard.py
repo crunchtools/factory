@@ -213,9 +213,9 @@ class FactoryScene extends Phaser.Scene {
         this.filterContainer = this.add.container(0, 0).setDepth(10).setScrollFactor(0);
         var filters = [
             { key: 'ALL', label: 'ALL' }, { key: 'FAILING', label: 'FAILING' },
-            { key: 'MCP', label: 'MCP' }, { key: 'IMG', label: 'IMG' },
-            { key: 'WEB', label: 'WEB' }, { key: 'SKL', label: 'SKL' },
-            { key: 'AGT', label: 'AGT' }
+            { key: 'MCP', label: 'MCP Server' }, { key: 'IMG', label: 'Container Image' },
+            { key: 'WEB', label: 'Web App' }, { key: 'SKL', label: 'Claude Skill' },
+            { key: 'AGT', label: 'Agent' }
         ];
         var x = 20, self = this;
         this.filterBtns = {};
@@ -414,7 +414,6 @@ class FactoryScene extends Phaser.Scene {
         }
 
         var COLORS = { 'MCP Server': 0x2266cc, 'Container Image': 0xcc7722, 'Web Application': 0x22aa66, 'Claude Skill': 0x8833cc, 'Autonomous Agent': 0xcc2266, 'Unknown': 0x555555 };
-        var ICONS = { 'MCP Server': 'MCP', 'Container Image': 'IMG', 'Web Application': 'WEB', 'Claude Skill': 'SKL', 'Autonomous Agent': 'AGT', 'Unknown': '???' };
 
         var startY = 95, lineSpacing = 135, machW = 108, machH = 78, machGap = 10, leftMargin = 195;
         var w = this.scale.width, org = d.org || 'crunchtools', self = this;
@@ -424,20 +423,16 @@ class FactoryScene extends Phaser.Scene {
             var y = startY + pi * lineSpacing;
             var repos = byProfile[prof];
             var color = COLORS[prof] || 0x555555;
-            var icon = ICONS[prof] || '???';
             var colorHex = '#' + color.toString(16).padStart(6, '0');
 
-            var labelText = this.add.text(62, y + 8, prof + ' (' + repos.length + ')', {
-                fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: '#888888'
+            var labelText = this.add.text(16, y + 8, prof + ' (' + repos.length + ')', {
+                fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: colorHex
             });
-            var boxW = labelText.width + 60;
+            var boxW = labelText.width + 16;
             var labelGfx = this.add.graphics();
             labelGfx.fillStyle(color, 0.1); labelGfx.fillRoundedRect(8, y + 3, boxW, 26, 4);
             labelGfx.lineStyle(1, color, 0.35); labelGfx.strokeRoundedRect(8, y + 3, boxW, 26, 4);
             this.factoryContainer.add(labelGfx);
-            this.factoryContainer.add(this.add.text(16, y + 8, '[' + icon + ']', {
-                fontFamily: 'monospace', fontSize: '12px', color: colorHex
-            }));
             this.factoryContainer.add(labelText);
 
             var conveyorY = y + 38;
