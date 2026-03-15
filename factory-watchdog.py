@@ -311,13 +311,38 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
 
 
 def check_artifact_sync(repo: str) -> tuple[int, str]:
-    """Return (1, summary) if versions match, (0, details) otherwise."""
+    """Return (1, summary) if versions match, (0, details) otherwise.
+
+    GitHub release, PyPI, and Quay are all required for MCP Servers.
+    Missing artifacts are a failure, not silently skipped.
+    """
     gh_ver = get_github_release_version(repo)
     pypi_ver = get_pypi_version(repo)
     quay_ver = get_quay_latest_tag(repo)
     ghcr_ver = get_ghcr_latest_tag(repo)
 
-    versions: dict[str, str | None] = {
+    # Check for missing required artifacts
+    missing = []
+    if not gh_ver:
+        missing.append("github")
+    if not pypi_ver:
+        missing.append("pypi")
+    if not quay_ver:
+        missing.append("quay")
+    if missing:
+        present = []
+        if gh_ver:
+            present.append(f"github={gh_ver}")
+        if pypi_ver:
+            present.append(f"pypi={pypi_ver}")
+        if quay_ver:
+            present.append(f"quay={quay_ver}")
+        detail = "missing: " + ",".join(missing)
+        if present:
+            detail += " | found: " + ", ".join(present)
+        return 0, detail
+
+    versions: dict[str, str] = {
         "github": gh_ver,
         "pypi": pypi_ver,
         "quay": quay_ver,
@@ -325,12 +350,8 @@ def check_artifact_sync(repo: str) -> tuple[int, str]:
     if ghcr_ver:
         versions["ghcr"] = ghcr_ver
 
-    found = {k: v for k, v in versions.items() if v is not None}
-    if not found:
-        return 0, "no versions found"
-
-    unique = set(found.values())
-    detail = ", ".join(f"{k}={v}" for k, v in found.items())
+    unique = set(versions.values())
+    detail = ", ".join(f"{k}={v}" for k, v in versions.items())
     if len(unique) == 1:
         return 1, next(iter(unique))
     else:
