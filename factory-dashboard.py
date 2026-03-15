@@ -52,13 +52,13 @@ class FactoryScene extends Phaser.Scene {
         document.getElementById('loading').style.display = 'none';
         this.factoryData = null;
         this.conveyors = [];
-        this.productionLines = [];
+        this.gears = [];
+        this.failingGlows = [];
+        this.scanY = 0;
+        this.isFirstLoad = true;
         this.activeFilter = 'ALL';
         this.soundEnabled = false;
         this.audioCtx = null;
-        this.isFirstLoad = true;
-        this.animGeneration = 0;
-        this.scanY = 0;
 
         this.generateTextures();
         this.gridGfx = this.add.graphics().setDepth(0);
@@ -92,10 +92,28 @@ class FactoryScene extends Phaser.Scene {
     }
 
     generateTextures() {
-        var g;
+        var g, r, cx, cy, teeth, i, a;
+        g = this.make.graphics();
+        r = 10; cx = r + 3; cy = r + 3;
+        g.lineStyle(1.5, 0xffffff, 1);
+        g.strokeCircle(cx, cy, r * 0.35);
+        g.fillStyle(0xffffff, 0.25);
+        g.fillCircle(cx, cy, r * 0.18);
+        teeth = 8;
+        for (i = 0; i < teeth; i++) {
+            a = (i / teeth) * Math.PI * 2;
+            g.lineStyle(2, 0xffffff, 0.7);
+            g.beginPath();
+            g.moveTo(cx + Math.cos(a) * r * 0.45, cy + Math.sin(a) * r * 0.45);
+            g.lineTo(cx + Math.cos(a) * r * 0.95, cy + Math.sin(a) * r * 0.95);
+            g.strokePath();
+        }
+        g.generateTexture('gear', (r + 3) * 2, (r + 3) * 2);
+        g.destroy();
+
         g = this.make.graphics();
         g.lineStyle(2, 0x5a5a8a, 0.9);
-        for (var i = 0; i < 3; i++) {
+        for (i = 0; i < 3; i++) {
             g.beginPath(); g.moveTo(i * 10, 12); g.lineTo(i * 10 + 12, 0); g.strokePath();
         }
         g.generateTexture('conveyor', 30, 12); g.destroy();
@@ -183,7 +201,7 @@ class FactoryScene extends Phaser.Scene {
         var cam = this.cameras.main;
         var sx = worldX - cam.scrollX;
         var sy = worldY - cam.scrollY - th - 8;
-        if (sy < 5) sy = worldY - cam.scrollY + 30;
+        if (sy < 5) sy = worldY - cam.scrollY + 85;
         if (sx + tw > this.scale.width - 10) sx = this.scale.width - tw - 10;
         this.tooltip.setPosition(sx, sy);
         this.tooltip.setVisible(true);
@@ -203,10 +221,9 @@ class FactoryScene extends Phaser.Scene {
         this.filterBtns = {};
         for (var i = 0; i < filters.length; i++) {
             var f = filters[i];
-            var active = f.key === this.activeFilter;
             var btn = this.add.text(x, 72, f.label, {
                 fontFamily: 'monospace', fontSize: '10px',
-                color: active ? '#00d4ff' : '#555555',
+                color: f.key === this.activeFilter ? '#00d4ff' : '#555555',
                 padding: { x: 6, y: 3 }
             }).setInteractive({ useHandCursor: true });
             btn.on('pointerup', (function(k) {
@@ -224,7 +241,7 @@ class FactoryScene extends Phaser.Scene {
         for (var i = 0; i < keys.length; i++) {
             this.filterBtns[keys[i]].setColor(keys[i] === key ? '#00d4ff' : '#555555');
         }
-        if (this.factoryData) this.buildFactory();
+        if (this.factoryData) this.buildFactory(null);
     }
 
     createLegend() {
@@ -236,64 +253,44 @@ class FactoryScene extends Phaser.Scene {
         bg.lineStyle(1, 0x0f3460, 0.5);
         bg.beginPath(); bg.moveTo(0, y - 5); bg.lineTo(this.scale.width, y - 5); bg.strokePath();
         this.legendContainer.add(bg);
-
         var items = [
-            { l: 'GHA = GitHub Actions', c: '#888' },
-            { l: 'VER = Version Sync', c: '#888' },
-            { l: 'ART = Artifact Sync', c: '#888' },
-            { l: 'CON = Constitution', c: '#888' }
+            { l: 'G = GHA', c: '#888' }, { l: 'V = Version Sync', c: '#888' },
+            { l: 'A = Artifact Sync', c: '#888' }, { l: 'C = Constitution', c: '#888' }
         ];
         var lx = 20;
         for (var i = 0; i < items.length; i++) {
             var t = this.add.text(lx, y + 2, items[i].l, {
                 fontFamily: 'monospace', fontSize: '10px', color: items[i].c
             });
-            this.legendContainer.add(t);
-            lx += t.width + 24;
+            this.legendContainer.add(t); lx += t.width + 24;
         }
         var dx = lx + 20, dg;
         dg = this.add.graphics(); dg.fillStyle(0x00ff88, 0.9); dg.fillCircle(dx, y + 8, 4);
         this.legendContainer.add(dg);
-        this.legendContainer.add(this.add.text(dx + 8, y + 2, 'PASS', {
-            fontFamily: 'monospace', fontSize: '10px', color: '#00ff88'
-        }));
+        this.legendContainer.add(this.add.text(dx + 8, y + 2, 'PASS', { fontFamily: 'monospace', fontSize: '10px', color: '#00ff88' }));
         dg = this.add.graphics(); dg.fillStyle(0xff4444, 0.9); dg.fillCircle(dx + 55, y + 8, 4);
         this.legendContainer.add(dg);
-        this.legendContainer.add(this.add.text(dx + 63, y + 2, 'FAIL', {
-            fontFamily: 'monospace', fontSize: '10px', color: '#ff4444'
-        }));
+        this.legendContainer.add(this.add.text(dx + 63, y + 2, 'FAIL', { fontFamily: 'monospace', fontSize: '10px', color: '#ff4444' }));
         dg = this.add.graphics(); dg.fillStyle(0x333344, 0.7); dg.fillCircle(dx + 108, y + 8, 4);
         this.legendContainer.add(dg);
-        this.legendContainer.add(this.add.text(dx + 116, y + 2, 'N/A', {
-            fontFamily: 'monospace', fontSize: '10px', color: '#555555'
-        }));
+        this.legendContainer.add(this.add.text(dx + 116, y + 2, 'N/A', { fontFamily: 'monospace', fontSize: '10px', color: '#555555' }));
     }
 
     createSoundToggle() {
         this.soundBtn = this.add.text(this.scale.width - 100, 52, '[MUTE]', {
-            fontFamily: 'monospace', fontSize: '9px', color: '#555555',
-            padding: { x: 4, y: 2 }
+            fontFamily: 'monospace', fontSize: '9px', color: '#555555', padding: { x: 4, y: 2 }
         }).setInteractive({ useHandCursor: true });
         this.hudContainer.add(this.soundBtn);
         var self = this;
         this.soundBtn.on('pointerup', function() {
             self.soundEnabled = !self.soundEnabled;
-            if (self.soundEnabled) {
-                self.initAudio();
-                self.soundBtn.setText('[SND]');
-                self.soundBtn.setColor('#00d4ff');
-            } else {
-                self.soundBtn.setText('[MUTE]');
-                self.soundBtn.setColor('#555555');
-            }
+            if (self.soundEnabled) { self.initAudio(); self.soundBtn.setText('[SND]'); self.soundBtn.setColor('#00d4ff'); }
+            else { self.soundBtn.setText('[MUTE]'); self.soundBtn.setColor('#555555'); }
         });
     }
 
     initAudio() {
-        if (!this.audioCtx) {
-            try { this.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-            catch (e) { /* no audio support */ }
-        }
+        if (!this.audioCtx) try { this.audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) {}
     }
 
     playSound(type) {
@@ -301,17 +298,7 @@ class FactoryScene extends Phaser.Scene {
         var ctx = this.audioCtx, now = ctx.currentTime;
         var osc = ctx.createOscillator(), gain = ctx.createGain();
         osc.connect(gain); gain.connect(ctx.destination);
-        if (type === 'clunk') {
-            osc.type = 'square'; osc.frequency.value = 80;
-            gain.gain.setValueAtTime(0.12, now);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
-            osc.start(now); osc.stop(now + 0.08);
-        } else if (type === 'ding') {
-            osc.type = 'sine'; osc.frequency.value = 880;
-            gain.gain.setValueAtTime(0.08, now);
-            gain.gain.exponentialRampToValueAtTime(0.001, now + 0.25);
-            osc.start(now); osc.stop(now + 0.25);
-        } else if (type === 'buzz') {
+        if (type === 'buzz') {
             osc.type = 'sawtooth'; osc.frequency.value = 120;
             gain.gain.setValueAtTime(0.12, now);
             gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
@@ -330,14 +317,12 @@ class FactoryScene extends Phaser.Scene {
     loadData() {
         var self = this;
         fetch('/api/status')
-            .then(function(r) {
-                if (!r.ok) throw new Error('No data');
-                return r.json();
-            })
+            .then(function(r) { if (!r.ok) throw new Error('No data'); return r.json(); })
             .then(function(data) {
                 if (data && Object.keys(data).length > 0) {
+                    var oldData = self.factoryData;
                     self.factoryData = data;
-                    self.buildFactory();
+                    self.buildFactory(oldData);
                     self.updateHUD();
                     if (!self.isFirstLoad) self.showRefreshFlash();
                     self.isFirstLoad = false;
@@ -361,12 +346,9 @@ class FactoryScene extends Phaser.Scene {
     }
 
     updateHUD() {
-        var d = this.factoryData;
-        if (!d) return;
-        var s = d.summary || {};
-        var health = s.health === 1;
-        var total = s.repos_total || 0;
-        var healthy = s.repos_healthy || 0;
+        var d = this.factoryData; if (!d) return;
+        var s = d.summary || {}, health = s.health === 1;
+        var total = s.repos_total || 0, healthy = s.repos_healthy || 0;
         var ageStr = '?';
         if (d.timestamp) {
             var age = Math.floor((Date.now() - new Date(d.timestamp).getTime()) / 1000);
@@ -374,21 +356,16 @@ class FactoryScene extends Phaser.Scene {
             else if (age < 7200) ageStr = Math.floor(age / 60) + 'm ago';
             else ageStr = Math.floor(age / 3600) + 'h ago';
         }
-        this.statusText.setText(
-            healthy + '/' + total + ' repos healthy  |  Updated ' + ageStr +
-            '  |  org: ' + (d.org || 'crunchtools')
-        );
+        this.statusText.setText(healthy + '/' + total + ' repos healthy  |  Updated ' + ageStr + '  |  org: ' + (d.org || 'crunchtools'));
         this.statusText.setColor('#888888');
-        var w = this.scale.width;
-        var hc = health ? 0x00ff88 : 0xff4444;
+        var w = this.scale.width, hc = health ? 0x00ff88 : 0xff4444;
         this.healthGfx.clear();
         this.healthGfx.fillStyle(hc, 0.12); this.healthGfx.fillCircle(w - 35, 30, 20);
         this.healthGfx.fillStyle(hc, 0.3); this.healthGfx.fillCircle(w - 35, 30, 13);
         this.healthGfx.fillStyle(hc, 0.9); this.healthGfx.fillCircle(w - 35, 30, 5);
         this.healthText.setText(health ? 'HEALTHY' : 'DEGRADED');
         this.healthText.setColor(health ? '#00ff88' : '#ff4444');
-        this.healthText.setPosition(w - 60, 22);
-        this.healthText.setOrigin(1, 0);
+        this.healthText.setPosition(w - 60, 22); this.healthText.setOrigin(1, 0);
         if (!health) {
             var fails = [];
             if (s.gha_failing) fails.push('GHA:' + s.gha_failing);
@@ -396,34 +373,26 @@ class FactoryScene extends Phaser.Scene {
             if (s.version_failing) fails.push('Ver:' + s.version_failing);
             if (s.artifact_failing) fails.push('Art:' + s.artifact_failing);
             if (!this.failDetailText) {
-                this.failDetailText = this.add.text(0, 0, '', {
-                    fontFamily: 'monospace', fontSize: '10px', color: '#ff6666'
-                });
+                this.failDetailText = this.add.text(0, 0, '', { fontFamily: 'monospace', fontSize: '10px', color: '#ff6666' });
                 this.hudContainer.add(this.failDetailText);
             }
             this.failDetailText.setText(fails.join('  '));
-            this.failDetailText.setPosition(w - 60, 40);
-            this.failDetailText.setOrigin(1, 0);
+            this.failDetailText.setPosition(w - 60, 40); this.failDetailText.setOrigin(1, 0);
             this.failDetailText.setVisible(true);
-        } else if (this.failDetailText) {
-            this.failDetailText.setVisible(false);
-        }
+        } else if (this.failDetailText) { this.failDetailText.setVisible(false); }
     }
 
-    buildFactory() {
-        this.animGeneration++;
+    buildFactory(oldData) {
         this.factoryContainer.removeAll(true);
         this.conveyors = [];
-        this.productionLines = [];
+        this.gears = [];
+        this.failingGlows = [];
 
         var d = this.factoryData;
         if (!d || !d.repos) return;
 
         var byProfile = {};
-        var profileOrder = [
-            'MCP Server', 'Container Image', 'Web Application',
-            'Claude Skill', 'Autonomous Agent', 'Unknown'
-        ];
+        var profileOrder = ['MCP Server', 'Container Image', 'Web Application', 'Claude Skill', 'Autonomous Agent', 'Unknown'];
         var entries = Object.entries(d.repos);
         for (var ei = 0; ei < entries.length; ei++) {
             var name = entries[ei][0], info = entries[ei][1];
@@ -432,381 +401,221 @@ class FactoryScene extends Phaser.Scene {
             byProfile[profile].push(Object.assign({ name: name }, info));
         }
         var pk = Object.keys(byProfile);
-        for (var i = 0; i < pk.length; i++) {
-            byProfile[pk[i]].sort(function(a, b) { return a.name.localeCompare(b.name); });
-        }
+        for (var i = 0; i < pk.length; i++) byProfile[pk[i]].sort(function(a, b) { return a.name.localeCompare(b.name); });
         var profiles = [];
-        for (var po = 0; po < profileOrder.length; po++) {
-            if (byProfile[profileOrder[po]]) profiles.push(profileOrder[po]);
-        }
+        for (var po = 0; po < profileOrder.length; po++) { if (byProfile[profileOrder[po]]) profiles.push(profileOrder[po]); }
 
-        var filterMap = {
-            'MCP': 'MCP Server', 'IMG': 'Container Image',
-            'WEB': 'Web Application', 'SKL': 'Claude Skill', 'AGT': 'Autonomous Agent'
-        };
+        var filterMap = { 'MCP': 'MCP Server', 'IMG': 'Container Image', 'WEB': 'Web Application', 'SKL': 'Claude Skill', 'AGT': 'Autonomous Agent' };
         if (this.activeFilter === 'FAILING') {
-            profiles = profiles.filter(function(p) {
-                return byProfile[p].some(function(r) { return !r.healthy; });
-            });
+            profiles = profiles.filter(function(p) { return byProfile[p].some(function(r) { return !r.healthy; }); });
         } else if (filterMap[this.activeFilter]) {
             var target = filterMap[this.activeFilter];
             profiles = profiles.filter(function(p) { return p === target; });
         }
 
-        var COLORS = {
-            'MCP Server': 0x2266cc, 'Container Image': 0xcc7722,
-            'Web Application': 0x22aa66, 'Claude Skill': 0x8833cc,
-            'Autonomous Agent': 0xcc2266, 'Unknown': 0x555555
-        };
-        var ICONS = {
-            'MCP Server': 'MCP', 'Container Image': 'IMG',
-            'Web Application': 'WEB', 'Claude Skill': 'SKL',
-            'Autonomous Agent': 'AGT', 'Unknown': '???'
-        };
+        var COLORS = { 'MCP Server': 0x2266cc, 'Container Image': 0xcc7722, 'Web Application': 0x22aa66, 'Claude Skill': 0x8833cc, 'Autonomous Agent': 0xcc2266, 'Unknown': 0x555555 };
+        var ICONS = { 'MCP Server': 'MCP', 'Container Image': 'IMG', 'Web Application': 'WEB', 'Claude Skill': 'SKL', 'Autonomous Agent': 'AGT', 'Unknown': '???' };
 
-        var startY = 95, lineSpacing = 140, w = this.scale.width;
+        var startY = 95, lineSpacing = 135, machW = 108, machH = 78, machGap = 10, leftMargin = 195;
+        var w = this.scale.width, org = d.org || 'crunchtools', self = this;
+
         for (var pi = 0; pi < profiles.length; pi++) {
             var prof = profiles[pi];
-            this.createProductionLine(
-                prof, byProfile[prof], COLORS[prof] || 0x555555,
-                ICONS[prof] || '???', startY + pi * lineSpacing, w,
-                d.org || 'crunchtools'
-            );
+            var y = startY + pi * lineSpacing;
+            var repos = byProfile[prof];
+            var color = COLORS[prof] || 0x555555;
+            var icon = ICONS[prof] || '???';
+            var colorHex = '#' + color.toString(16).padStart(6, '0');
+
+            var labelText = this.add.text(62, y + 8, prof + ' (' + repos.length + ')', {
+                fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: '#888888'
+            });
+            var boxW = labelText.width + 60;
+            var labelGfx = this.add.graphics();
+            labelGfx.fillStyle(color, 0.1); labelGfx.fillRoundedRect(8, y + 3, boxW, 26, 4);
+            labelGfx.lineStyle(1, color, 0.35); labelGfx.strokeRoundedRect(8, y + 3, boxW, 26, 4);
+            this.factoryContainer.add(labelGfx);
+            this.factoryContainer.add(this.add.text(16, y + 8, '[' + icon + ']', {
+                fontFamily: 'monospace', fontSize: '12px', color: colorHex
+            }));
+            this.factoryContainer.add(labelText);
+
+            var conveyorY = y + 38;
+            var conveyorW = Math.max(w - leftMargin + 20, repos.length * (machW + machGap) + 30);
+            var cBg = this.add.graphics();
+            cBg.fillStyle(0x10102a, 0.85); cBg.fillRect(leftMargin - 15, conveyorY - 6, conveyorW, machH + 24);
+            cBg.lineStyle(2, 0x252550, 0.7);
+            cBg.beginPath(); cBg.moveTo(leftMargin - 15, conveyorY - 6); cBg.lineTo(leftMargin + conveyorW - 15, conveyorY - 6); cBg.strokePath();
+            cBg.beginPath(); cBg.moveTo(leftMargin - 15, conveyorY + machH + 18); cBg.lineTo(leftMargin + conveyorW - 15, conveyorY + machH + 18); cBg.strokePath();
+            this.factoryContainer.add(cBg);
+
+            var ct = this.add.tileSprite(leftMargin - 15, conveyorY - 6, conveyorW, 10, 'conveyor').setOrigin(0, 0).setAlpha(0.5);
+            var cb = this.add.tileSprite(leftMargin - 15, conveyorY + machH + 8, conveyorW, 10, 'conveyor').setOrigin(0, 0).setAlpha(0.7);
+            this.factoryContainer.add(ct); this.factoryContainer.add(cb);
+            this.conveyors.push(ct, cb);
+
+            for (var ri = 0; ri < repos.length; ri++) {
+                var mx = leftMargin + ri * (machW + machGap);
+                var my = conveyorY + 2;
+                this.createMachine(mx, my, machW, machH, repos[ri], color, org);
+
+                if (oldData && oldData.repos && oldData.repos[repos[ri].name]) {
+                    var wasHealthy = oldData.repos[repos[ri].name].healthy;
+                    var nowHealthy = repos[ri].healthy;
+                    if (wasHealthy && !nowHealthy) {
+                        this.showStatusChange(mx, my, machW, machH, false);
+                        this.playSound('buzz');
+                    } else if (!wasHealthy && nowHealthy) {
+                        this.showStatusChange(mx, my, machW, machH, true);
+                        this.playSound('chime');
+                    }
+                }
+            }
         }
 
-        this.worldHeight = startY + profiles.length * lineSpacing + 40;
+        this.worldHeight = startY + profiles.length * lineSpacing + 50;
         this.cameras.main.setBounds(0, 0, w, Math.max(this.worldHeight, this.scale.height));
         this.drawGrid();
-        this.animatePackages();
     }
 
-    createProductionLine(profile, repos, color, icon, lineY, w, org) {
-        var labelText = this.add.text(16, lineY + 4,
-            '[' + icon + '] ' + profile + ' (' + repos.length + ')', {
-            fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: '#888888'
-        });
-        var boxW = labelText.width + 16;
-        var labelBg = this.add.graphics();
-        labelBg.fillStyle(color, 0.1);
-        labelBg.fillRoundedRect(8, lineY, boxW, 22, 4);
-        labelBg.lineStyle(1, color, 0.35);
-        labelBg.strokeRoundedRect(8, lineY, boxW, 22, 4);
-        this.factoryContainer.add(labelBg);
-        this.factoryContainer.add(labelText);
+    createMachine(x, y, w, h, repo, profileColor, org) {
+        var healthy = repo.healthy !== false;
+        var glowColor = healthy ? 0x00ff88 : 0xff4444;
+        var self = this;
 
-        var bL = 15, bR = w - 15, bT = lineY + 28, bB = lineY + 120;
-        var dockS = w * 0.82;
+        var glow = this.add.graphics();
+        glow.fillStyle(glowColor, healthy ? 0.05 : 0.1);
+        glow.fillRoundedRect(x - 4, y - 4, w + 8, h + 8, 8);
+        this.factoryContainer.add(glow);
+        if (!healthy) this.failingGlows.push({ gfx: glow, x: x, y: y, w: w, h: h, color: glowColor });
 
-        var bBg = this.add.graphics();
-        bBg.fillStyle(0x10102a, 0.85);
-        bBg.fillRect(bL, bT, bR - bL, bB - bT);
-        bBg.lineStyle(2, 0x252550, 0.7);
-        bBg.beginPath(); bBg.moveTo(bL, bT); bBg.lineTo(bR, bT); bBg.strokePath();
-        bBg.beginPath(); bBg.moveTo(bL, bB); bBg.lineTo(bR, bB); bBg.strokePath();
-        this.factoryContainer.add(bBg);
+        var body = this.add.graphics();
+        body.fillStyle(profileColor, 0.18); body.fillRoundedRect(x, y, w, h, 5);
+        body.lineStyle(1.5, glowColor, 0.6); body.strokeRoundedRect(x, y, w, h, 5);
+        body.lineStyle(1, profileColor, 0.2);
+        body.beginPath(); body.moveTo(x + 6, y + 30); body.lineTo(x + w - 6, y + 30); body.strokePath();
+        this.factoryContainer.add(body);
 
-        var ctT = this.add.tileSprite(bL, bT, bR - bL, 10, 'conveyor').setOrigin(0, 0).setAlpha(0.5);
-        var ctB = this.add.tileSprite(bL, bB - 10, bR - bL, 10, 'conveyor').setOrigin(0, 0).setAlpha(0.7);
-        this.factoryContainer.add(ctT);
-        this.factoryContainer.add(ctB);
-        this.conveyors.push(ctT, ctB);
-
-        var dG = this.add.graphics();
-        dG.fillStyle(0x00ff88, 0.04);
-        dG.fillRect(dockS, bT + 1, bR - dockS - 1, bB - bT - 2);
-        dG.lineStyle(1, 0x00ff88, 0.2);
-        dG.strokeRect(dockS, bT + 1, bR - dockS - 1, bB - bT - 2);
-        this.factoryContainer.add(dG);
-
-        var shipped = repos.filter(function(r) { return r.healthy; }).length;
-        var dLabel = this.add.text((dockS + bR) / 2, bB + 3,
-            shipped + '/' + repos.length + ' shipped', {
-            fontFamily: 'monospace', fontSize: '9px',
-            color: shipped === repos.length ? '#00ff88' : '#ffaa00'
-        }).setOrigin(0.5, 0);
-        this.factoryContainer.add(dLabel);
-
-        var gateArea = dockS - bL - 80;
-        var gateStart = bL + 80;
-        var gateSpacing = gateArea / 4;
-        var gateKeys = ['gha', 'version_sync', 'artifact_sync', 'constitution'];
-        var gateLabels = ['GHA', 'VER', 'ART', 'CON'];
-        var gateXPositions = [];
-        for (var gi = 0; gi < 4; gi++) {
-            var gx = gateStart + gi * gateSpacing;
-            gateXPositions.push(gx);
-            this.createGateStructure(gx, lineY, gateKeys[gi], gateLabels[gi], repos, org);
-        }
-
-        try {
-            var se = this.add.particles(bL + 25, lineY + 70, 'smoke', {
-                speed: { min: 8, max: 20 }, angle: { min: 255, max: 285 },
-                scale: { start: 0.3, end: 0.8 }, alpha: { start: 0.24, end: 0 },
-                tint: 0x8888aa, lifespan: 2000, frequency: 450, quantity: 1
-            });
-            this.factoryContainer.add(se);
-        } catch (e) { /* particles not supported */ }
-
-        var pkgs = [];
-        var dockW = bR - dockS - 30;
-        var dockSpc = Math.min(50, dockW / Math.max(1, shipped));
-        var si = 0;
-        for (var ri = 0; ri < repos.length; ri++) {
-            var repo = repos[ri];
-            var dX = repo.healthy ? (dockS + 15 + si * dockSpc) : 0;
-            if (repo.healthy) si++;
-            var pkg = this.createPackage(repo, color, bL - 50, lineY, org);
-            pkgs.push({ container: pkg, repo: repo, dockX: dX });
-        }
-
-        this.productionLines.push({
-            repos: repos, gateXPositions: gateXPositions,
-            lineY: lineY, packages: pkgs, org: org
-        });
-    }
-
-    createGateStructure(gateX, lineY, gateKey, label, repos, org) {
-        var pW = 8, gapH = 25, pTop = lineY + 35, pH = 70;
-        var anyFail = false, anyPass = false;
-        for (var i = 0; i < repos.length; i++) {
-            var v = repos[i][gateKey];
-            if (v === 0) anyFail = true;
-            if (v === 1) anyPass = true;
-        }
-        var lc = anyFail ? 0xff4444 : anyPass ? 0x00ff88 : 0x333344;
-        var la = (anyFail || anyPass) ? 0.9 : 0.4;
-        var pc = anyFail ? 0x442222 : anyPass ? 0x224422 : 0x222233;
-
-        var g = this.add.graphics();
-        g.fillStyle(pc, 0.8);
-        g.fillRect(gateX - gapH - pW, pTop, pW, pH);
-        g.fillRect(gateX + gapH, pTop, pW, pH);
-        g.lineStyle(1, lc, 0.3);
-        g.strokeRect(gateX - gapH - pW, pTop, pW, pH);
-        g.strokeRect(gateX + gapH, pTop, pW, pH);
-        g.fillStyle(pc, 0.6);
-        g.fillRect(gateX - gapH - pW, pTop, gapH * 2 + pW * 2, 4);
-        g.fillStyle(lc, 0.15); g.fillCircle(gateX, lineY + 28, 10);
-        g.fillStyle(lc, la); g.fillCircle(gateX, lineY + 28, 5);
-        this.factoryContainer.add(g);
-
-        var labelBg = this.add.graphics();
-        var fullLabels = { 'GHA': 'GitHub Actions', 'VER': 'Version Sync', 'ART': 'Artifact Sync', 'CON': 'Constitution' };
-        var fullLabel = fullLabels[label] || label;
-        var lt = this.add.text(gateX, lineY + 26, label, {
-            fontFamily: '"Cascadia Code", monospace', fontSize: '11px', color: '#cccccc', fontStyle: 'bold'
-        }).setOrigin(0.5, 0.5);
-        var lbW = lt.width + 12, lbH = lt.height + 6;
-        labelBg.fillStyle(0x0a0a2e, 0.85);
-        labelBg.fillRoundedRect(gateX - lbW / 2, lineY + 26 - lbH / 2, lbW, lbH, 3);
-        labelBg.lineStyle(1, lc, 0.4);
-        labelBg.strokeRoundedRect(gateX - lbW / 2, lineY + 26 - lbH / 2, lbW, lbH, 3);
-        this.factoryContainer.add(labelBg);
-        this.factoryContainer.add(lt);
-        this.factoryContainer.add(this.add.text(gateX, lineY + 113, fullLabel, {
-            fontFamily: 'monospace', fontSize: '9px', color: '#777777'
+        var shortName = repo.name.replace(/^mcp-/, '').replace(/-crunchtools$/, '');
+        if (shortName.length > 13) shortName = shortName.substring(0, 12) + '\\u2026';
+        this.factoryContainer.add(this.add.text(x + w / 2, y + 8, shortName, {
+            fontFamily: '"Cascadia Code", monospace', fontSize: '10px', color: '#e0e0e0', fontStyle: 'bold'
         }).setOrigin(0.5, 0));
 
-        var zone = this.add.zone(gateX, lineY + 70, gapH * 2 + pW * 2, pH + 20)
-            .setInteractive({ useHandCursor: true });
-        this.factoryContainer.add(zone);
-        var self = this;
-        zone.on('pointerup', function() {
-            for (var j = 0; j < repos.length; j++) {
-                if (repos[j][gateKey] === 0) {
-                    var url = self.getGateLink(gateKey, repos[j].name, org);
-                    if (url) window.open(url, '_blank');
-                    return;
-                }
-            }
-        });
-    }
-
-    getGateLink(gateKey, repoName, org) {
-        if (gateKey === 'gha') return 'https://github.com/' + org + '/' + repoName + '/actions';
-        if (gateKey === 'version_sync') return 'https://pypi.org/project/' + repoName + '/';
-        if (gateKey === 'artifact_sync') return 'https://quay.io/repository/' + org + '/' + repoName;
-        if (gateKey === 'constitution') return 'https://github.com/' + org + '/' + repoName + '/blob/main/.specify/memory/constitution.md';
-        return null;
-    }
-
-    createPackage(repo, profileColor, startX, lineY, org) {
-        var pkg = this.add.container(startX, lineY + 70);
-        var box = this.add.rectangle(0, 0, 45, 30, profileColor, 0.25);
-        box.setStrokeStyle(1.5, profileColor);
-        pkg.add(box);
-        pkg.setData('box', box);
-
-        var sn = repo.name.replace(/^mcp-/, '').replace(/-crunchtools$/, '');
-        if (sn.length > 8) sn = sn.substring(0, 7) + '\\u2026';
-        pkg.add(this.add.text(0, -6, sn, {
-            fontFamily: 'monospace', fontSize: '8px', color: '#e0e0e0', fontStyle: 'bold'
-        }).setOrigin(0.5));
-
         if (repo.version && /^\\d/.test(repo.version)) {
-            pkg.add(this.add.text(0, 5, 'v' + repo.version, {
-                fontFamily: 'monospace', fontSize: '7px',
+            this.factoryContainer.add(this.add.text(x + w / 2, y + 21, 'v' + repo.version, {
+                fontFamily: 'monospace', fontSize: '8px',
                 color: repo.version_sync === 1 ? '#00ff88' : '#ff6666'
-            }).setOrigin(0.5));
+            }).setOrigin(0.5, 0));
         }
 
-        var xM = this.add.text(0, 0, 'X', {
-            fontFamily: 'monospace', fontSize: '16px', color: '#ff4444', fontStyle: 'bold'
-        }).setOrigin(0.5).setAlpha(0);
-        pkg.add(xM);
-        pkg.setData('xMark', xM);
+        var gates = [
+            { label: 'G', value: repo.gha },
+            { label: 'V', value: repo.version_sync },
+            { label: 'A', value: repo.artifact_sync },
+            { label: 'C', value: repo.constitution }
+        ];
+        var lightY = y + h - 22, lightSpacing = 20;
+        var lightStartX = x + (w - (gates.length - 1) * lightSpacing) / 2;
+        for (var gi = 0; gi < gates.length; gi++) {
+            var gate = gates[gi];
+            var lx = lightStartX + gi * lightSpacing;
+            var lg = this.add.graphics();
+            if (gate.value === null || gate.value === undefined) {
+                lg.fillStyle(0x333344, 0.4); lg.fillCircle(lx, lightY, 4);
+            } else if (gate.value === 1) {
+                lg.fillStyle(0x00ff88, 0.2); lg.fillCircle(lx, lightY, 7);
+                lg.fillStyle(0x00ff88, 0.9); lg.fillCircle(lx, lightY, 3);
+            } else {
+                lg.fillStyle(0xff4444, 0.25); lg.fillCircle(lx, lightY, 7);
+                lg.fillStyle(0xff4444, 0.9); lg.fillCircle(lx, lightY, 3);
+            }
+            this.factoryContainer.add(lg);
+            this.factoryContainer.add(this.add.text(lx, lightY + 10, gate.label, {
+                fontFamily: 'monospace', fontSize: '7px', color: '#555555'
+            }).setOrigin(0.5, 0));
+        }
 
-        var ck = this.add.text(18, -12, '\\u2713', {
-            fontFamily: 'sans-serif', fontSize: '10px', color: '#00ff88'
-        }).setOrigin(0.5).setAlpha(0);
-        pkg.add(ck);
-        pkg.setData('check', ck);
+        var gear = this.add.image(x + w - 14, y + 14, 'gear');
+        gear.setTint(profileColor); gear.setAlpha(healthy ? 0.7 : 0.25);
+        this.factoryContainer.add(gear);
+        this.gears.push({ image: gear, speed: healthy ? 0.3 : 0.03 });
 
-        pkg.setSize(45, 30);
-        pkg.setInteractive({ useHandCursor: true });
+        var issues = repo.issues_open || 0, prs = repo.prs_open || 0;
+        if (issues > 0 || prs > 0) {
+            var parts = [];
+            if (issues > 0) parts.push(issues + 'i');
+            if (prs > 0) parts.push(prs + 'pr');
+            this.factoryContainer.add(this.add.text(x + w - 4, y + h - 6, parts.join('/'), {
+                fontFamily: 'monospace', fontSize: '7px', color: '#ffaa00'
+            }).setOrigin(1, 1));
+        }
 
-        var self = this;
-        pkg.on('pointerover', function() {
-            self.tweens.add({ targets: pkg, scaleX: 1.08, scaleY: 1.08, duration: 100 });
-            self.showTooltip(pkg.x, pkg.y, repo);
-        });
-        pkg.on('pointerout', function() {
-            self.tweens.add({ targets: pkg, scaleX: 1, scaleY: 1, duration: 100 });
-            self.hideTooltip();
-        });
-        pkg.on('pointerup', function() {
+        if (healthy) {
+            try {
+                var smokeE = this.add.particles(x + w / 2, y - 3, 'smoke', {
+                    speed: { min: 6, max: 18 }, angle: { min: 255, max: 285 },
+                    scale: { start: 0.2, end: 0.7 }, alpha: { start: 0.24, end: 0 },
+                    tint: 0x8888aa, lifespan: 2500, frequency: 450, quantity: 1
+                });
+                this.factoryContainer.add(smokeE);
+            } catch (e) {}
+        } else {
+            try {
+                var sparkE = this.add.particles(x + w / 2, y + h / 2, 'spark', {
+                    speed: { min: 15, max: 50 }, angle: { min: 0, max: 360 },
+                    scale: { start: 0.7, end: 0 }, alpha: { start: 1, end: 0 },
+                    tint: 0xff4444, lifespan: 700, frequency: 1250, quantity: 2
+                });
+                this.factoryContainer.add(sparkE);
+            } catch (e) {}
+        }
+
+        var hitZone = this.add.zone(x + w / 2, y + h / 2, w, h)
+            .setInteractive({ useHandCursor: true });
+        this.factoryContainer.add(hitZone);
+        hitZone.on('pointerover', function() { self.showTooltip(x, y, repo); });
+        hitZone.on('pointerout', function() { self.hideTooltip(); });
+        hitZone.on('pointerup', function() {
             window.open('https://github.com/' + org + '/' + repo.name, '_blank');
         });
-
-        this.factoryContainer.add(pkg);
-        return pkg;
     }
 
-    animatePackages() {
-        var gen = this.animGeneration, self = this;
-        for (var li = 0; li < this.productionLines.length; li++) {
-            var line = this.productionLines[li];
-            for (var pi = 0; pi < line.packages.length; pi++) {
-                (function(pd, delay, ld) {
-                    self.time.delayedCall(delay, function() {
-                        if (self.animGeneration !== gen) return;
-                        self.animatePackageThroughGate(
-                            pd.container, pd.repo, 0,
-                            ld.gateXPositions, pd.dockX, ld.lineY, gen, ld.org
-                        );
-                    });
-                })(line.packages[pi], pi * 200, line);
-            }
-        }
-    }
-
-    animatePackageThroughGate(pkg, repo, gIdx, gateXPos, dockX, lineY, gen, org) {
-        if (this.animGeneration !== gen) return;
-        var gateKeys = ['gha', 'version_sync', 'artifact_sync', 'constitution'];
-
-        if (gIdx >= gateKeys.length) {
-            var self2 = this;
-            this.tweens.add({
-                targets: pkg, x: dockX, duration: 800, ease: 'Power1',
-                onComplete: function() {
-                    self2.showPackageShipped(pkg);
-                    self2.playSound('chime');
-                }
-            });
-            return;
-        }
-
-        var key = gateKeys[gIdx], val = repo[key], gateX = gateXPos[gIdx];
-        if (val === null || val === undefined) {
-            this.animatePackageThroughGate(pkg, repo, gIdx + 1, gateXPos, dockX, lineY, gen, org);
-            return;
-        }
-
-        var self = this;
-        this.tweens.add({
-            targets: pkg, x: gateX, duration: 1200, ease: 'Power2',
-            onComplete: function() {
-                if (self.animGeneration !== gen) return;
-                self.playSound('clunk');
-                self.showGateScan(gateX, lineY, function() {
-                    if (self.animGeneration !== gen) return;
-                    if (val === 1) {
-                        self.playSound('ding');
-                        self.flashGate(gateX, lineY, true);
-                        self.time.delayedCall(300, function() {
-                            self.animatePackageThroughGate(
-                                pkg, repo, gIdx + 1, gateXPos, dockX, lineY, gen, org
-                            );
-                        });
-                    } else {
-                        self.playSound('buzz');
-                        self.flashGate(gateX, lineY, false);
-                        self.showPackageFailed(pkg, gateX, lineY);
-                    }
-                });
-            }
-        });
-    }
-
-    showGateScan(gateX, lineY, cb) {
-        var beam = this.add.rectangle(gateX, lineY + 35, 50, 2, 0x00d4ff, 0.6);
-        this.factoryContainer.add(beam);
-        this.tweens.add({
-            targets: beam, y: lineY + 105, alpha: 0, duration: 400,
-            onComplete: function() { beam.destroy(); if (cb) cb(); }
-        });
-    }
-
-    flashGate(gateX, lineY, pass) {
-        var c = pass ? 0x00ff88 : 0xff4444;
-        var flash = this.add.rectangle(gateX, lineY + 70, 60, 80, c, 0.15);
+    showStatusChange(x, y, w, h, recovered) {
+        var color = recovered ? 0x00ff88 : 0xff4444;
+        var flash = this.add.rectangle(x + w / 2, y + h / 2, w + 12, h + 12, color, 0.35);
         this.factoryContainer.add(flash);
         this.tweens.add({
-            targets: flash, alpha: 0, duration: 300,
+            targets: flash, alpha: 0, duration: 2000, ease: 'Power2',
             onComplete: function() { flash.destroy(); }
         });
-    }
-
-    showPackageFailed(pkg, gateX, lineY) {
-        var box = pkg.getData('box');
-        if (box) box.setStrokeStyle(2, 0xff4444);
-        var xM = pkg.getData('xMark');
-        if (xM) this.tweens.add({ targets: xM, alpha: 1, duration: 200 });
-        this.tweens.add({ targets: pkg, x: gateX - 5, duration: 150, ease: 'Back' });
-        try {
-            var burst = this.add.particles(gateX, lineY + 70, 'spark', {
-                speed: { min: 30, max: 80 }, angle: { min: 0, max: 360 },
-                scale: { start: 1, end: 0 }, alpha: { start: 1, end: 0 },
-                tint: 0xff4444, lifespan: 500, quantity: 8, emitting: false
-            });
-            this.factoryContainer.add(burst);
-            burst.explode(8);
-            this.time.delayedCall(1000, function() { burst.destroy(); });
-        } catch (e) { /* particles not supported */ }
-    }
-
-    showPackageShipped(pkg) {
-        var box = pkg.getData('box');
-        if (box) box.setStrokeStyle(1.5, 0x00ff88);
-        var ck = pkg.getData('check');
-        if (ck) this.tweens.add({ targets: ck, alpha: 1, duration: 200 });
-        this.tweens.add({
-            targets: pkg, alpha: { from: 1, to: 0.85 },
-            duration: 1500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut'
-        });
+        if (!recovered) {
+            try {
+                var burst = this.add.particles(x + w / 2, y + h / 2, 'spark', {
+                    speed: { min: 20, max: 60 }, angle: { min: 0, max: 360 },
+                    scale: { start: 0.8, end: 0 }, alpha: { start: 0.8, end: 0 },
+                    tint: 0xff4444, lifespan: 600, quantity: 6, emitting: false
+                });
+                this.factoryContainer.add(burst);
+                burst.explode(6);
+                this.time.delayedCall(1000, function() { burst.destroy(); });
+            } catch (e) {}
+        }
     }
 
     update(time, delta) {
-        for (var i = 0; i < this.conveyors.length; i++) {
-            this.conveyors[i].tilePositionX -= delta * 0.09;
+        for (var ci = 0; ci < this.conveyors.length; ci++) this.conveyors[ci].tilePositionX -= delta * 0.09;
+        for (var gi = 0; gi < this.gears.length; gi++) this.gears[gi].image.angle += this.gears[gi].speed * delta * 0.1;
+        for (var fi = 0; fi < this.failingGlows.length; fi++) {
+            var fg = this.failingGlows[fi];
+            var pulse = 0.06 + Math.sin(time * 0.004) * 0.06;
+            fg.gfx.clear(); fg.gfx.fillStyle(fg.color, pulse);
+            fg.gfx.fillRoundedRect(fg.x - 4, fg.y - 4, fg.w + 8, fg.h + 8, 8);
         }
         this.scanY = (this.scanY + delta * 0.02) % this.scale.height;
-        this.scanGfx.clear();
-        this.scanGfx.lineStyle(1, 0x00d4ff, 0.03);
-        this.scanGfx.beginPath();
-        this.scanGfx.moveTo(0, this.scanY);
-        this.scanGfx.lineTo(this.scale.width, this.scanY);
-        this.scanGfx.strokePath();
+        this.scanGfx.clear(); this.scanGfx.lineStyle(1, 0x00d4ff, 0.03);
+        this.scanGfx.beginPath(); this.scanGfx.moveTo(0, this.scanY);
+        this.scanGfx.lineTo(this.scale.width, this.scanY); this.scanGfx.strokePath();
     }
 }
 
