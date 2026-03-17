@@ -21,7 +21,14 @@ import re
 import sys
 from pathlib import Path
 
-VALID_PROFILES = {"MCP Server", "Container Image", "Claude Skill", "Autonomous Agent", "Web Application"}
+VALID_PROFILES = {
+    "MCP Server",
+    "Container Image",
+    "Claude Skill",
+    "Autonomous Agent",
+    "Forked MCP Server",
+    "Web Application",
+}
 
 # ---------------------------------------------------------------------------
 # Header parsing
@@ -78,18 +85,20 @@ def check_universal(text: str, header: dict[str, str]) -> list[str]:
             f"Valid profiles: {', '.join(sorted(VALID_PROFILES))}"
         )
 
-    # License reference
-    if "AGPL-3.0" not in text:
+    # License reference (forked projects use upstream license, not AGPL)
+    profile = header.get("Profile", "")
+    if profile != "Forked MCP Server" and "AGPL-3.0" not in text:
         violations.append("UNIVERSAL: No reference to AGPL-3.0 license found")
 
-    # Semantic versioning reference
-    semver_patterns = [
-        r"[Ss]emantic [Vv]ersion",
-        r"semver",
-        r"MAJOR.*MINOR.*PATCH",
-    ]
-    if not any(re.search(p, text) for p in semver_patterns):
-        violations.append("UNIVERSAL: No semantic versioning section found")
+    # Semantic versioning reference (forked projects follow upstream versioning)
+    if profile != "Forked MCP Server":
+        semver_patterns = [
+            r"[Ss]emantic [Vv]ersion",
+            r"semver",
+            r"MAJOR.*MINOR.*PATCH",
+        ]
+        if not any(re.search(p, text) for p in semver_patterns):
+            violations.append("UNIVERSAL: No semantic versioning section found")
 
     return violations
 
@@ -107,6 +116,7 @@ MCP_REQUIRED_SECTIONS = [
     (r"##\s+VI\.", "Section VI"),
     (r"##\s+VII\.", "Section VII"),
     (r"##\s+VIII\.", "Section VIII"),
+    (r"##\s+IX\.", "Section IX"),
 ]
 
 MCP_SECURITY_LAYERS = [
@@ -132,7 +142,7 @@ def check_mcp_server(text: str) -> list[str]:
     """Run MCP Server profile checks."""
     violations: list[str] = []
 
-    # All 8 top-level sections
+    # All 9 top-level sections
     for pattern, label in MCP_REQUIRED_SECTIONS:
         if not re.search(pattern, text):
             violations.append(f"MCP_SERVER: Missing {label}")
@@ -191,11 +201,10 @@ def check_container_image(text: str) -> list[str]:
         r"ubi\d+",
         r"UBI",
         r"registry\.access\.redhat\.com",
-        r"registry\.redhat\.io",
         r"[Hh]ummingbird",
     ]
     if not any(re.search(p, text) for p in base_image_patterns):
-        violations.append("CONTAINER_IMAGE: No base image declared (UBI, Red Hat registry, or Hummingbird)")
+        violations.append("CONTAINER_IMAGE: No base image declared (UBI or Hummingbird)")
 
     # Registry declared
     if not re.search(r"quay\.io/crunchtools/", text):
@@ -369,6 +378,40 @@ def check_autonomous_agent(text: str) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Forked MCP Server profile checks
+# ---------------------------------------------------------------------------
+
+
+def check_forked_mcp_server(text: str) -> list[str]:
+    """Run Forked MCP Server profile checks."""
+    violations: list[str] = []
+
+    # Upstream section with source URL and license
+    if not re.search(r"##\s+Upstream", text):
+        violations.append("FORKED_MCP_SERVER: Missing 'Upstream' section")
+    if not re.search(r"\*\*Source:\*\*", text):
+        violations.append("FORKED_MCP_SERVER: Upstream source URL not declared")
+    if not re.search(r"\*\*License:\*\*", text):
+        violations.append("FORKED_MCP_SERVER: Upstream license not declared")
+
+    # Deployment section with port and env file
+    if not re.search(r"##\s+Deployment", text):
+        violations.append("FORKED_MCP_SERVER: Missing 'Deployment' section")
+    if not re.search(r"\*\*Port:\*\*", text):
+        violations.append("FORKED_MCP_SERVER: Port not declared")
+    if not re.search(r"\*\*Env file:\*\*", text):
+        violations.append("FORKED_MCP_SERVER: Env file path not declared")
+    if not re.search(r"\*\*Credentials:\*\*", text):
+        violations.append("FORKED_MCP_SERVER: Credential env vars not listed")
+
+    # Patches section
+    if not re.search(r"##\s+Patches", text):
+        violations.append("FORKED_MCP_SERVER: Missing 'Patches' section")
+
+    return violations
+
+
+# ---------------------------------------------------------------------------
 # Web Application profile checks
 # ---------------------------------------------------------------------------
 
@@ -519,6 +562,8 @@ def validate(
         all_violations.extend(check_claude_skill(text, skill_dir))
     elif profile == "Autonomous Agent":
         all_violations.extend(check_autonomous_agent(text))
+    elif profile == "Forked MCP Server":
+        all_violations.extend(check_forked_mcp_server(text))
     elif profile == "Web Application":
         all_violations.extend(check_web_application(text))
     elif profile and profile not in VALID_PROFILES:
