@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
 """CrunchTools factory watchdog — auto-discovers repos, runs checks, serves status.
 
-Monitors all crunchtools repos that have a constitution across 6 dimensions:
+Monitors all crunchtools repos that have a constitution across 5 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP Server repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP Server repos)
   4. Constitution validation (all repos with constitutions)
   5. Open GitHub issues & PRs (all repos)
-  6. Zabbix item coverage (summary items exist on host)
 
 Repos are auto-discovered from the GitHub org. Any repo with a constitution
 at .specify/memory/constitution.md is monitored. The constitution's Profile
 header determines which checks apply.
 
-Live service monitoring (HTTP, TCP, process checks) is handled by Zabbix
-natively — factory does not duplicate that.
+Live service monitoring (HTTP, TCP, process checks) is handled by Nagios —
+factory does not duplicate that.
 
-Results are:
-  - Written to /data/factory-status.json (consumed by factory-dashboard)
-  - Pushed to Zabbix as 8 summary trapper items (for alerting)
+Results are written to /data/factory-status.json, which is both what
+factory-dashboard renders and what Nagios alerts on: the host bind-mounts the
+same directory and check_factory_status.sh reads the summary block directly.
+That file IS the alerting interface — if its schema changes, the Nagios check
+changes with it.
+
+A sixth dimension and a metrics push to the old monitoring stack were removed
+in RT #1478; Nagios reads the status file instead.
 
 No pip dependencies — stdlib only + gh CLI.
 """
@@ -27,8 +31,6 @@ import base64
 import json
 import os
 import re
-import socket
-import struct
 import subprocess
 import sys
 import tempfile
@@ -36,11 +38,6 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-ZABBIX_HOST = "factory.crunchtools.com"
-ZABBIX_SERVER = os.environ.get("ZABBIX_SERVER", "127.0.0.1")
-ZABBIX_PORT = int(os.environ.get("ZABBIX_PORT", "10051"))
-ZABBIX_API_URL = os.environ.get("ZABBIX_API_URL", "")
-ZABBIX_API_TOKEN = os.environ.get("ZABBIX_API_TOKEN", "")
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "crunchtools")
 STATUS_FILE = os.environ.get("STATUS_FILE", "/data/factory-status.json")
 
@@ -410,115 +407,6 @@ def check_open_prs(repo: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Check 6: Zabbix Item Coverage (summary items)
-# ---------------------------------------------------------------------------
-
-SUMMARY_KEYS = [
-    "factory.health",
-    "factory.repos.total",
-    "factory.repos.healthy",
-    "factory.repos.failing",
-    "factory.gha.failing",
-    "factory.constitution.failing",
-    "factory.version.failing",
-    "factory.artifact.failing",
-]
-
-
-def zabbix_api_call(method: str, params: dict) -> dict | None:
-    """Make a Zabbix JSON-RPC API call."""
-    if not ZABBIX_API_URL or not ZABBIX_API_TOKEN:
-        return None
-    payload = json.dumps({
-        "jsonrpc": "2.0",
-        "method": method,
-        "params": params,
-        "id": 1,
-    }).encode("utf-8")
-    headers = {
-        "Content-Type": "application/json-rpc",
-        "Authorization": f"Bearer {ZABBIX_API_TOKEN}",
-    }
-    try:
-        req = urllib.request.Request(ZABBIX_API_URL, data=payload, headers=headers)
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-        if "error" in data:
-            msg = data["error"].get("data", data["error"].get("message", ""))
-            print(f"  WARN: Zabbix API error: {msg}", file=sys.stderr)
-            return None
-        return data.get("result")
-    except Exception as e:
-        print(f"  WARN: Zabbix API unreachable: {e}", file=sys.stderr)
-        return None
-
-
-def check_zabbix_coverage() -> tuple[int, list[str]]:
-    """Return (1, []) if all summary items exist, (0, missing) otherwise."""
-    if not ZABBIX_API_URL or not ZABBIX_API_TOKEN:
-        print("  SKIP: Set ZABBIX_API_URL and ZABBIX_API_TOKEN to enable")
-        return 1, []
-
-    hosts = zabbix_api_call("host.get", {
-        "filter": {"host": [ZABBIX_HOST]},
-        "output": ["hostid"],
-    })
-    if not hosts:
-        return 1, []
-    host_id = hosts[0]["hostid"]
-
-    items = zabbix_api_call("item.get", {
-        "hostids": host_id,
-        "output": ["key_"],
-        "search": {"key_": "factory."},
-        "startSearch": True,
-    })
-    if items is None:
-        print("  WARN: Could not query Zabbix API, skipping")
-        return 1, []
-
-    existing = {item["key_"] for item in items}
-    missing = sorted(set(SUMMARY_KEYS) - existing)
-    if missing:
-        return 0, missing
-    return 1, []
-
-
-# ---------------------------------------------------------------------------
-# Zabbix trapper protocol
-# ---------------------------------------------------------------------------
-
-def send_trapper(items: list[dict[str, str]]) -> bool:
-    """Send items to Zabbix via the trapper (ZBXD) binary protocol."""
-    payload = json.dumps({
-        "request": "sender data",
-        "data": items,
-    }).encode("utf-8")
-
-    header = b"ZBXD\x01" + struct.pack("<II", len(payload), 0)
-
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            sock.settimeout(10)
-            sock.connect((ZABBIX_SERVER, ZABBIX_PORT))
-            sock.sendall(header + payload)
-
-            resp_header = sock.recv(13)
-            if len(resp_header) < 13:
-                print("WARN: Short response from Zabbix", file=sys.stderr)
-                return False
-            resp_len = struct.unpack("<I", resp_header[5:9])[0]
-            resp_body = sock.recv(resp_len)
-            resp = json.loads(resp_body)
-            info = resp.get("info", "")
-            print(f"Zabbix response: {info}")
-            return "failed: 0" in info
-    except Exception as e:
-        print(f"ERROR sending to Zabbix: {e}", file=sys.stderr)
-        return False
-
-
-# ---------------------------------------------------------------------------
 # JSON status output
 # ---------------------------------------------------------------------------
 
@@ -645,16 +533,6 @@ def main() -> int:
         print(f"  {name}: {count}")
         repo_results[name]["prs_open"] = count
 
-    # --- Check 6: Zabbix Item Coverage ---
-    print("\n--- Zabbix Item Coverage ---")
-    zabbix_ok, missing_keys = check_zabbix_coverage()
-    if missing_keys:
-        print(f"  WARN: {len(missing_keys)} summary items missing:")
-        for key in missing_keys:
-            print(f"    - {key}")
-    elif zabbix_ok and ZABBIX_API_URL and ZABBIX_API_TOKEN:
-        print(f"  OK: All {len(SUMMARY_KEYS)} summary items exist")
-
     # --- Compute summary ---
     for name, res in repo_results.items():
         healthy = True
@@ -701,21 +579,6 @@ def main() -> int:
         "repos": repo_results,
     }
     write_status(status_data)
-
-    # --- Send summary trapper items to Zabbix ---
-    trapper_items = [
-        {"host": ZABBIX_HOST, "key": "factory.health", "value": str(1 if all_healthy else 0)},
-        {"host": ZABBIX_HOST, "key": "factory.repos.total", "value": str(total_repos)},
-        {"host": ZABBIX_HOST, "key": "factory.repos.healthy", "value": str(healthy_repos)},
-        {"host": ZABBIX_HOST, "key": "factory.repos.failing", "value": str(failing_repos)},
-        {"host": ZABBIX_HOST, "key": "factory.gha.failing", "value": str(gha_failing)},
-        {"host": ZABBIX_HOST, "key": "factory.constitution.failing", "value": str(constitution_failing)},
-        {"host": ZABBIX_HOST, "key": "factory.version.failing", "value": str(version_failing)},
-        {"host": ZABBIX_HOST, "key": "factory.artifact.failing", "value": str(artifact_failing)},
-    ]
-
-    print(f"\n--- Sending {len(trapper_items)} summary items to Zabbix ---")
-    send_trapper(trapper_items)
 
     # --- Print summary ---
     print(f"\n{'=' * 60}")

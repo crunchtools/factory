@@ -4,7 +4,7 @@
 Reads /data/factory-status.json (written by factory-watchdog) and renders
 a Phaser 3 factory floor visualization showing software delivery health.
 
-Live service monitoring is handled by Zabbix natively — this dashboard
+Live service monitoring is handled by Nagios — this dashboard
 focuses exclusively on software delivery: GHA, version sync, artifact
 sync, constitution compliance, and open issues/PRs.
 
