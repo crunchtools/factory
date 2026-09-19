@@ -8,6 +8,34 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+## [1.3.1] - 2026-09-19
+
+### Fixed
+- **Watchdog runs took 57 minutes, and all but ~5 of them were spent idle in
+  `connect()` waiting on unroutable IPv6 addresses.** The factory host
+  advertises IPv6 but cannot route it. `pypi.org` publishes four AAAA records
+  and `quay.io` publishes eight, glibc sorts IPv6 ahead of IPv4, and `urllib`
+  walks that list strictly in order with no Happy Eyeballs fallback. So every
+  version-sync call burned 4x15s and every artifact-sync call 8x15s before
+  reaching a working IPv4 address — 180s per MCP repo, 57 minutes across 19 of
+  them, which is the whole observed runtime.
+
+  `get_pypi_version()` and `get_quay_latest_tag()` now share a `fetch_json()`
+  helper that resolves IPv4 only.
+
+  This also explains why the symptom was so hard to place: `api.github.com`
+  publishes no AAAA record, so the several hundred `gh` calls were never
+  affected, and per-call GitHub latency measured *faster* on the factory host
+  than on a laptop. The process was not saturated, it was blocked — 12 minutes
+  into a run it had consumed under one second of CPU and had no child process.
+
+  Consequence beyond the runtime: `OnCalendar=*:0/15` silently degraded to
+  back-to-back hourly runs, because systemd will not start a second instance of
+  a `Type=oneshot` unit while one is still running. Observed directly — a run
+  finished at 23:30:36 and the next started at 23:30:35. Fleet status was
+  therefore up to an hour stale against a Nagios check that pages CRITICAL at
+  120 minutes, leaving roughly 15 minutes of headroom.
+
 ## [1.3.0] - 2026-09-19
 
 ### Fixed
