@@ -8,6 +8,33 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-19
+
+### Fixed
+- **The watchdog now discovers forked repos.** `discover_repos()` asked GitHub
+  for `?type=sources`, which silently means "not forks", so every forked repo in
+  the org was invisible to all eight dimensions. transcriptor carries a
+  constitution and the Forked MCP Server profile exists precisely for it, yet it
+  had never been checked by anything. Now `?type=all`.
+
+  Carrying a constitution is the membership test, not how the repo was born.
+
+  The profile gating already handles the rest: version sync, artifact sync and
+  the gourmand gate all test for the exact string `"MCP Server"`, and a fork's
+  profile is `"Forked MCP Server"`, so those three skip it without any change.
+  The releases dimension reads it as not distribution-bearing, because
+  `publish-docker.yml` fires on tag push rather than on a release. What is left
+  is GHA status, constitution validation, changelog and open issues/PRs — which
+  are exactly the dimensions that mean something for a fork we maintain.
+
+  Verified before merging: transcriptor passes constitution validation and the
+  changelog check, and its GHA runs are green, so discovering it adds a healthy
+  repo rather than a new red light. Fleet total goes 48 -> 49.
+
+### Added
+- `fork` is now recorded per repo in `factory-status.json`, so the dashboard and
+  anything else reading the file can tell a fork from a source repo.
+
 ## [1.2.0] - 2026-09-19
 
 ### Added

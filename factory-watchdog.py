@@ -124,12 +124,18 @@ def discover_repos() -> list[dict]:
         }
     """
     print("Discovering repos from GitHub org...")
-    repos_data = gh_api_paginated(f"orgs/{GITHUB_ORG}/repos?type=sources")
+    # `type=all`, not `type=sources`. `sources` silently means "not forks", and
+    # a fork we have adopted is still ours: transcriptor carries a constitution
+    # and the Forked MCP Server profile exists precisely for it, yet it went
+    # unchecked by all eight dimensions for as long as this filter stood.
+    # Carrying a constitution is the membership test, not how the repo was born.
+    repos_data = gh_api_paginated(f"orgs/{GITHUB_ORG}/repos?type=all")
     if not repos_data:
         print("  WARN: Could not list org repos, falling back to empty list")
         return []
 
     repo_names = sorted(r["name"] for r in repos_data if not r.get("archived"))
+    forks = {r["name"]: bool(r.get("fork")) for r in repos_data}
     print(f"  Found {len(repo_names)} non-archived repos in {GITHUB_ORG}")
 
     discovered = []
@@ -144,8 +150,9 @@ def discover_repos() -> list[dict]:
             "profile": profile,
             "constitution": content,
             "header": header,
+            "fork": forks.get(name, False),
         })
-        print(f"  + {name} [{profile}]")
+        print(f"  + {name} [{profile}]" + (" (fork)" if forks.get(name) else ""))
 
     print(f"  Discovered {len(discovered)} repos with constitutions")
     return discovered
@@ -684,6 +691,7 @@ def main() -> int:
     for r in repos:
         repo_results[r["name"]] = {
             "profile": r["profile"],
+            "fork": r.get("fork", False),
             "gha": None,
             "version_sync": None,
             "version": None,
