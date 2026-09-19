@@ -1,7 +1,7 @@
 [Unit]
 Description=Podman container - factory.crunchtools.com (Fleet Watchdog)
 Wants=network-online.target
-After=network-online.target zabbix.crunchtools.com.service
+After=network-online.target
 
 [Service]
 Type=simple

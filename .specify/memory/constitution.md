@@ -6,7 +6,7 @@
 > **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.0.0
 > **Profile:** Container Image
 
-CrunchTools fleet watchdog — monitors GHA workflow status, version sync, artifact sync, and constitution compliance across all CrunchTools repos. Sends results to Zabbix via trapper protocol.
+CrunchTools fleet watchdog — monitors GHA workflow status, version sync, artifact sync, and constitution compliance across all CrunchTools repos. Writes results to /data/factory-status.json, which factory-dashboard renders and Nagios alerts on via check_factory_status.sh.
 
 ---
 
@@ -48,7 +48,7 @@ Published to `quay.io/crunchtools/factory`.
 - Service: `fleet-watchdog.service` (Type=oneshot)
 - Main script: `/usr/local/bin/fleet-watchdog` (Python, stdlib only)
 - Constitution validator: `/usr/local/lib/validate-constitution.py`
-- Environment variables: `GH_TOKEN` (required), `ZABBIX_SERVER`, `ZABBIX_PORT`
+- Environment variables: `GH_TOKEN` (required), `GITHUB_ORG`, `STATUS_FILE`
 
 ## Testing
 
