@@ -385,7 +385,112 @@ def check_constitution(repo_info: dict) -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
-# Check 5: Open GitHub Issues & PRs
+# Check 5: Changelog
+# ---------------------------------------------------------------------------
+
+def check_changelog(repo: str) -> tuple[int, str]:
+    """Verify CHANGELOG.md exists and satisfies Section II. Returns (score, detail).
+
+    This duplicates check_changelog() in validate-constitution.py rather than
+    calling it, because the watchdog has no checkout: check_constitution() feeds
+    the validator a tempfile, so every filesystem-based check in it is a no-op
+    here. The API is the only view of the repo we have.
+    """
+    content = gh_file_content(repo, "CHANGELOG.md")
+    if content is None:
+        return 0, "no CHANGELOG.md"
+
+    missing = []
+    if not re.search(r"^#+\s*\[Unreleased\]", content, re.MULTILINE):
+        missing.append("no [Unreleased] section")
+    if not re.search(r"keepachangelog\.com", content, re.IGNORECASE):
+        missing.append("no Keep a Changelog reference")
+
+    if missing:
+        return 0, ", ".join(missing)
+    return 1, ""
+
+
+# ---------------------------------------------------------------------------
+# Check 6: Gourmand CI gate
+# ---------------------------------------------------------------------------
+
+GOURMAND_DEAD_PATTERNS = [
+    r"cargo\s+install.*gourmand",
+    r"codeberg\.org/mattdm/gourmand",
+]
+
+GOURMAND_GATE_PROFILES = {"MCP Server", "CLI Tool"}
+
+
+def strip_yaml_comments(text: str) -> str:
+    """Drop whole-line YAML comments before pattern matching.
+
+    gatehouse/.github/workflows/gourmand.yml documents the dead
+    `cargo install --git codeberg.org/...` pattern in a header comment
+    explaining why the reusable workflow exists. Matching raw text flags that
+    explanation as the very violation it warns against.
+    """
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def check_gourmand_gate(repo: str) -> tuple[int, str]:
+    """Verify the Gourmand CI gate is really wired up. Returns (score, detail).
+
+    Mirrors check_gourmand_ci_gate() in validate-constitution.py. That one reads
+    the workflow files off disk, which means it has never once run here: the
+    watchdog hands the validator a tempfile, so repo_root points at a /tmp
+    ancestor and every filesystem check inside it silently returns clean. The
+    gate RT #1468 installed was only ever enforced in per-repo CI. This is the
+    fleet-wide half, over the API.
+    """
+    listing = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/.github/workflows")
+    if not listing or not isinstance(listing, list):
+        return 0, "no .github/workflows directory"
+
+    problems = []
+    found_gourmand = False
+
+    for entry in listing:
+        name = entry.get("name", "")
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        raw = gh_file_content(repo, f".github/workflows/{name}")
+        if raw is None:
+            continue
+        content = strip_yaml_comments(raw)
+        if not re.search(r"gourmand", content, re.IGNORECASE):
+            continue
+        # The reusable definition itself IS the gate; it has no gate to call.
+        if re.search(r"^\s*workflow_call:", content, re.MULTILINE):
+            found_gourmand = True
+            continue
+
+        found_gourmand = True
+        if any(
+            re.search(pattern, content, re.IGNORECASE)
+            for pattern in GOURMAND_DEAD_PATTERNS
+        ):
+            problems.append(f"{name} uses a dead Gourmand pattern")
+        # gatehouse hosts the reusable workflow, so it references its own copy
+        # with a local path. Everyone else must point at crunchtools/gatehouse.
+        if not re.search(
+            r"uses:\s*(?:crunchtools/gatehouse|\.)/\.github/workflows/gourmand\.yml",
+            content,
+        ):
+            problems.append(f"{name} inlines the job instead of calling gatehouse")
+
+    if not found_gourmand:
+        return 0, "no CI workflow references Gourmand"
+    if problems:
+        return 0, ", ".join(problems)
+    return 1, ""
+
+
+# ---------------------------------------------------------------------------
+# Check 7: Open GitHub Issues & PRs
 # ---------------------------------------------------------------------------
 
 def check_open_issues(repo: str) -> int:
@@ -478,6 +583,10 @@ def main() -> int:
             "artifact_sync": None,
             "constitution": None,
             "constitution_violations": "",
+            "changelog": None,
+            "changelog_detail": "",
+            "gourmand_gate": None,
+            "gourmand_gate_detail": "",
             "issues_open": 0,
             "prs_open": 0,
             "healthy": True,
@@ -520,7 +629,27 @@ def main() -> int:
         repo_results[name]["constitution"] = score
         repo_results[name]["constitution_violations"] = violations
 
-    # --- Check 5: Open Issues & PRs ---
+    # --- Check 5: Changelog ---
+    print("\n--- Changelog ---")
+    for name in repo_names:
+        score, detail = check_changelog(name)
+        status = "OK" if score == 1 else "FAIL"
+        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
+        repo_results[name]["changelog"] = score
+        repo_results[name]["changelog_detail"] = detail
+
+    # --- Check 6: Gourmand CI gate (MCP Server and CLI Tool profiles only) ---
+    print("\n--- Gourmand CI Gate ---")
+    for name in repo_names:
+        if repo_results[name]["profile"] not in GOURMAND_GATE_PROFILES:
+            continue
+        score, detail = check_gourmand_gate(name)
+        status = "OK" if score == 1 else "FAIL"
+        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
+        repo_results[name]["gourmand_gate"] = score
+        repo_results[name]["gourmand_gate_detail"] = detail
+
+    # --- Check 7: Open Issues & PRs ---
     print("\n--- Open Issues ---")
     for name in repo_names:
         count = check_open_issues(name)
@@ -544,6 +673,10 @@ def main() -> int:
             healthy = False
         if res["artifact_sync"] == 0:
             healthy = False
+        if res["changelog"] == 0:
+            healthy = False
+        if res.get("gourmand_gate") == 0:
+            healthy = False
         res["healthy"] = healthy
 
     # Merge selective scan results into existing status
@@ -558,6 +691,10 @@ def main() -> int:
     failing_repos = total_repos - healthy_repos
     gha_failing = sum(1 for r in repo_results.values() if r["gha"] == 0)
     constitution_failing = sum(1 for r in repo_results.values() if r["constitution"] == 0)
+    changelog_failing = sum(1 for r in repo_results.values() if r.get("changelog") == 0)
+    gourmand_failing = sum(
+        1 for r in repo_results.values() if r.get("gourmand_gate") == 0
+    )
     version_failing = sum(1 for n in mcp_repos if repo_results[n]["version_sync"] == 0)
     artifact_failing = sum(1 for n in mcp_repos if repo_results[n]["artifact_sync"] == 0)
     all_healthy = failing_repos == 0
@@ -573,6 +710,8 @@ def main() -> int:
             "repos_failing": failing_repos,
             "gha_failing": gha_failing,
             "constitution_failing": constitution_failing,
+            "changelog_failing": changelog_failing,
+            "gourmand_failing": gourmand_failing,
             "version_failing": version_failing,
             "artifact_failing": artifact_failing,
         },
@@ -589,6 +728,10 @@ def main() -> int:
             print(f"    GHA failing: {gha_failing}")
         if constitution_failing:
             print(f"    Constitution failing: {constitution_failing}")
+        if changelog_failing:
+            print(f"    Changelog failing: {changelog_failing}")
+        if gourmand_failing:
+            print(f"    Gourmand gate failing: {gourmand_failing}")
         if version_failing:
             print(f"    Version sync failing: {version_failing}")
         if artifact_failing:
