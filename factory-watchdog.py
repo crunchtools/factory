@@ -34,6 +34,7 @@ import base64
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import tempfile
@@ -264,14 +265,47 @@ def get_github_release_version(repo: str) -> str | None:
     return None
 
 
+_GETADDRINFO = socket.getaddrinfo
+
+
+def fetch_json(url: str, timeout: int = 15):
+    """GET a JSON document, resolving the host to IPv4 only.
+
+    The factory host advertises IPv6 but cannot route it. pypi.org publishes
+    four AAAA records and quay.io publishes eight, and glibc sorts IPv6 ahead
+    of IPv4. urllib walks that list strictly in order with no Happy Eyeballs
+    fallback, so every call burned the full connect timeout on each dead v6
+    address before reaching a working v4 one: 4x15s for PyPI plus 8x15s for
+    Quay, per MCP repo. Across 19 MCP repos that is 57 minutes of a watchdog
+    run spent idle in connect(), which is the entire reason runs took an hour
+    and the 15-minute timer degraded to back-to-back hourly runs.
+
+    api.github.com publishes no AAAA record at all, which is why the several
+    hundred `gh` calls were never affected and the stall looked like GitHub
+    latency rather than what it was.
+    """
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+
+    def ipv4_only(host, port, family=0, *args, **kwargs):
+        kwargs.pop("family", None)
+        return _GETADDRINFO(host, port, socket.AF_INET, *args, **kwargs)
+
+    # Single-threaded script, so a scoped override is safe and beats
+    # reimplementing TLS-with-SNI against a pre-resolved address.
+    socket.getaddrinfo = ipv4_only
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read())
+    finally:
+        socket.getaddrinfo = _GETADDRINFO
+
+
 def get_pypi_version(repo: str) -> str | None:
     package = f"{PYPI_PREFIX}{repo.removeprefix('mcp-')}{PYPI_SUFFIX}"
     url = f"https://pypi.org/pypi/{package}/json"
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-            return data.get("info", {}).get("version")
+        data = fetch_json(url)
+        return data.get("info", {}).get("version")
     except Exception:
         return None
 
@@ -279,19 +313,17 @@ def get_pypi_version(repo: str) -> str | None:
 def get_quay_latest_tag(repo: str) -> str | None:
     url = f"https://quay.io/api/v1/repository/{GITHUB_ORG}/{repo}/tag/?limit=20&onlyActiveTags=true"
     try:
-        req = urllib.request.Request(url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            data = json.loads(resp.read())
-            tags = data.get("tags", [])
-            for tag in tags:
-                name = tag.get("name", "").lstrip("v")
-                if re.match(r"^\d+\.\d+\.\d+$", name):
-                    return name
-            for tag in tags:
-                name = tag.get("name", "").lstrip("v")
-                if re.match(r"^\d+\.\d+$", name):
-                    return name
-            return None
+        data = fetch_json(url)
+        tags = data.get("tags", [])
+        for tag in tags:
+            name = tag.get("name", "").lstrip("v")
+            if re.match(r"^\d+\.\d+\.\d+$", name):
+                return name
+        for tag in tags:
+            name = tag.get("name", "").lstrip("v")
+            if re.match(r"^\d+\.\d+$", name):
+                return name
+        return None
     except Exception:
         return None
 
