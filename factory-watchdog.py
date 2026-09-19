@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """CrunchTools factory watchdog — auto-discovers repos, runs checks, serves status.
 
-Monitors all crunchtools repos that have a constitution across 5 dimensions:
+Monitors all crunchtools repos that have a constitution across 8 dimensions:
   1. GHA workflow status (all repos)
   2. Version sync across pyproject.toml / __init__.py / server.py (MCP Server repos)
   3. Artifact sync across GitHub release / PyPI / Quay.io / GHCR (MCP Server repos)
   4. Constitution validation (all repos with constitutions)
-  5. Open GitHub issues & PRs (all repos)
+  5. Changelog (all repos)
+  6. Gourmand CI gate (MCP Server and CLI Tool repos)
+  7. GitHub Releases (distribution-bearing repos)
+  8. Open GitHub issues & PRs (all repos)
 
 Repos are auto-discovered from the GitHub org. Any repo with a constitution
 at .specify/memory/constitution.md is monitored. The constitution's Profile
@@ -490,7 +493,111 @@ def check_gourmand_gate(repo: str) -> tuple[int, str]:
 
 
 # ---------------------------------------------------------------------------
-# Check 7: Open GitHub Issues & PRs
+# Check 7: GitHub Releases
+# ---------------------------------------------------------------------------
+
+# Constitution 1.15.0 scoped the Section II release requirement and made it
+# forward-looking. Tags older than this are deliberately out of scope: a release
+# created against an old tag checks out THAT tag and ships it, so backfilling is
+# the stale-artifact failure (RT #1462), not the fix for it.
+RELEASE_CUTOFF = "2026-09-19"
+
+VERSION_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+$")
+
+
+def is_distribution_bearing(repo: str) -> bool:
+    """True when the repo publishes an artifact on a release event.
+
+    Constitution II defines this by wiring rather than by profile, so the check
+    reads the wiring: any workflow with `release:` inside its `on:` block. A
+    profile allowlist would drift the moment a repo gained or dropped a
+    publish job; this cannot.
+    """
+    listing = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/.github/workflows")
+    if not listing or not isinstance(listing, list):
+        return False
+
+    for entry in listing:
+        name = entry.get("name", "")
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        raw = gh_file_content(repo, f".github/workflows/{name}")
+        if raw is None:
+            continue
+        content = strip_yaml_comments(raw)
+        # The `on:` block runs from `on:` to the next top-level key. Scoping to
+        # it matters: `github.event.release.tag_name` appears in the steps of
+        # workflows that are not release-triggered at all.
+        match = re.search(r"^on:(.*?)^\S", content, re.DOTALL | re.MULTILINE)
+        on_block = match.group(1) if match else ""
+        if re.search(r"^\s+release:", on_block, re.MULTILINE):
+            return True
+    return False
+
+
+def tag_commit_date(repo: str, sha: str) -> str | None:
+    """Return the YYYY-MM-DD committer date for a tag's commit, or None."""
+    data = gh_api(f"repos/{GITHUB_ORG}/{repo}/commits/{sha}")
+    if not isinstance(data, dict):
+        return None
+    date = data.get("commit", {}).get("committer", {}).get("date")
+    return date[:10] if date else None
+
+
+def check_releases(repo: str) -> tuple[int | None, str]:
+    """Verify every post-cutoff version tag has a GitHub Release.
+
+    Returns (None, reason) for repos that are not distribution-bearing — they
+    are exempt under Section II, and reporting them as failing is what made the
+    raw 178-tag number useless as a signal (RT #1485). None renders as a grey
+    light, the same way gourmand_gate no-ops for profiles it does not cover.
+    """
+    if not is_distribution_bearing(repo):
+        return None, "not distribution-bearing"
+
+    tags = gh_api_paginated(f"repos/{GITHUB_ORG}/{repo}/tags")
+    if not tags:
+        return 1, ""
+
+    released = {
+        r.get("tag_name")
+        for r in gh_api_paginated(f"repos/{GITHUB_ORG}/{repo}/releases")
+        if isinstance(r, dict) and not r.get("draft")
+    }
+
+    missing = []
+    malformed = []
+    for tag in tags:
+        name = tag.get("name", "")
+        if not VERSION_TAG_RE.match(name):
+            # A release under a bare `0.4.0` reads as a missing `v0.4.0` to any
+            # audit matching vX.Y.Z, and leaves a junk tag behind. 1.15.0 makes
+            # the `v` explicit, so report it rather than skipping past it.
+            if re.match(r"^\d+\.\d+\.\d+$", name):
+                malformed.append(name)
+            continue
+        if name in released:
+            continue
+        sha = tag.get("commit", {}).get("sha")
+        date = tag_commit_date(repo, sha) if sha else None
+        # Undatable tags are treated as historical. A check that guesses errs
+        # toward silence here: the cost of a missed old tag is nil, the cost of
+        # a permanent false red is that nobody reads the light.
+        if date and date >= RELEASE_CUTOFF:
+            missing.append(name)
+
+    problems = []
+    if missing:
+        problems.append("no release for " + ", ".join(sorted(missing)))
+    if malformed:
+        problems.append("tag missing the `v`: " + ", ".join(sorted(malformed)))
+    if problems:
+        return 0, "; ".join(problems)
+    return 1, ""
+
+
+# ---------------------------------------------------------------------------
+# Check 8: Open GitHub Issues & PRs
 # ---------------------------------------------------------------------------
 
 def check_open_issues(repo: str) -> int:
@@ -587,6 +694,8 @@ def main() -> int:
             "changelog_detail": "",
             "gourmand_gate": None,
             "gourmand_gate_detail": "",
+            "releases": None,
+            "releases_detail": "",
             "issues_open": 0,
             "prs_open": 0,
             "healthy": True,
@@ -649,7 +758,16 @@ def main() -> int:
         repo_results[name]["gourmand_gate"] = score
         repo_results[name]["gourmand_gate_detail"] = detail
 
-    # --- Check 7: Open Issues & PRs ---
+    # --- Check 7: GitHub Releases (distribution-bearing repos only) ---
+    print("\n--- GitHub Releases ---")
+    for name in repo_names:
+        score, detail = check_releases(name)
+        status = "OK" if score == 1 else ("n/a" if score is None else "FAIL")
+        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
+        repo_results[name]["releases"] = score
+        repo_results[name]["releases_detail"] = detail
+
+    # --- Check 8: Open Issues & PRs ---
     print("\n--- Open Issues ---")
     for name in repo_names:
         count = check_open_issues(name)
@@ -677,6 +795,8 @@ def main() -> int:
             healthy = False
         if res.get("gourmand_gate") == 0:
             healthy = False
+        if res.get("releases") == 0:
+            healthy = False
         res["healthy"] = healthy
 
     # Merge selective scan results into existing status
@@ -695,6 +815,7 @@ def main() -> int:
     gourmand_failing = sum(
         1 for r in repo_results.values() if r.get("gourmand_gate") == 0
     )
+    releases_failing = sum(1 for r in repo_results.values() if r.get("releases") == 0)
     version_failing = sum(1 for n in mcp_repos if repo_results[n]["version_sync"] == 0)
     artifact_failing = sum(1 for n in mcp_repos if repo_results[n]["artifact_sync"] == 0)
     all_healthy = failing_repos == 0
@@ -712,6 +833,7 @@ def main() -> int:
             "constitution_failing": constitution_failing,
             "changelog_failing": changelog_failing,
             "gourmand_failing": gourmand_failing,
+            "releases_failing": releases_failing,
             "version_failing": version_failing,
             "artifact_failing": artifact_failing,
         },
@@ -732,6 +854,8 @@ def main() -> int:
             print(f"    Changelog failing: {changelog_failing}")
         if gourmand_failing:
             print(f"    Gourmand gate failing: {gourmand_failing}")
+        if releases_failing:
+            print(f"    Releases failing: {releases_failing}")
         if version_failing:
             print(f"    Version sync failing: {version_failing}")
         if artifact_failing:

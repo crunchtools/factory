@@ -192,6 +192,7 @@ class FactoryScene extends Phaser.Scene {
             'Constitution: ' + (repo.constitution === 1 ? 'PASS' : repo.constitution === 0 ? 'FAIL' : 'n/a'),
             'Changelog: ' + (repo.changelog === 1 ? 'PASS' : repo.changelog === 0 ? 'FAIL' : 'n/a'),
             'Gourmand gate: ' + (repo.gourmand_gate === 1 ? 'PASS' : repo.gourmand_gate === 0 ? 'FAIL' : 'n/a'),
+            'Releases: ' + (repo.releases === 1 ? 'PASS' : repo.releases === 0 ? 'FAIL' : 'n/a') + (repo.releases_detail ? ' — ' + repo.releases_detail : ''),
             'Issues: ' + (repo.issues_open || 0) + '  PRs: ' + (repo.prs_open || 0)
         ];
         this.tooltipTextObj.setText(lines.join('\\n'));
@@ -420,6 +421,7 @@ class FactoryScene extends Phaser.Scene {
             if (s.gha_failing) fails.push('GHA:' + s.gha_failing);
             if (s.constitution_failing) fails.push('Con:' + s.constitution_failing);
             if (s.changelog_failing) fails.push('Chg:' + s.changelog_failing);
+            if (s.releases_failing) fails.push('Rel:' + s.releases_failing);
             if (s.gourmand_failing) fails.push('Gou:' + s.gourmand_failing);
             if (s.version_failing) fails.push('Ver:' + s.version_failing);
             if (s.artifact_failing) fails.push('Art:' + s.artifact_failing);
@@ -568,7 +570,8 @@ class FactoryScene extends Phaser.Scene {
             { label: 'A', value: repo.artifact_sync },
             { label: 'C', value: repo.constitution },
             { label: 'L', value: repo.changelog },
-            { label: 'R', value: repo.gourmand_gate }
+            { label: 'R', value: repo.gourmand_gate },
+            { label: 'D', value: repo.releases }
         ];
         var lightY = y + h - 22, lightSpacing = 20;
         var lightStartX = x + (w - (gates.length - 1) * lightSpacing) / 2;

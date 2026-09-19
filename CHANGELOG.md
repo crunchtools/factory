@@ -8,6 +8,47 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-09-19
+
+### Added
+- **Releases dimension** (RT #1485). `check_releases()` verifies over the GitHub
+  API that every version tag in a distribution-bearing repo has a GitHub Release,
+  as Constitution II requires since 1.15.0. Reported per repo, counted as
+  `releases_failing` in the summary, and shown as the `D` gate light plus a
+  tooltip line.
+
+  **The dimension only asks the question where the answer means something.**
+  A repo is distribution-bearing when a workflow's `on:` block contains
+  `release:` — read from the wiring, not from the profile, so it cannot drift
+  when a repo gains or drops a publish job. Everything else returns `None` and
+  renders grey, the way `gourmand_gate` already no-ops for profiles it does not
+  cover.
+
+  **It is deliberately forward-looking**, scoped to tags dated on or after the
+  1.15.0 cutoff. RT #1485 audited 178 tags with no release and found 166 of them
+  to be deploy markers in five continuously deployed repos. A check that reported
+  those as failures would sit permanently red, and a permanently red light is one
+  nobody reads. The remaining truth — two genuinely undistributed versions — was
+  invisible underneath them.
+
+  Backfilling is also not a safe remedy, which is why the cutoff is in the
+  constitution and not just here: release-triggered workflows check out the
+  release ref, so creating a release against an old tag builds and ships that old
+  code (RT #1462).
+
+  Undatable tags are treated as historical rather than as violations. The check
+  errs toward silence: a missed old tag costs nothing, a permanent false red
+  costs the signal.
+
+- **Malformed version tags are reported** by the same check. A release created
+  against a bare `0.4.0` satisfies no audit matching `vX.Y.Z` and leaves a junk
+  tag in the repo. Found in mcp-request-tracker, now fixed.
+
+### Changed
+- `check_factory_status.sh` needs no change: it greps named keys out of the
+  summary block, so `releases_failing` is additive. Verified against a generated
+  status file.
+
 ## [1.1.0] - 2026-09-19
 
 ### Added
