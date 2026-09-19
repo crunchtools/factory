@@ -21,11 +21,21 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
   `check_changelog()` in `validate-constitution.py`, because `check_constitution()`
   feeds the validator constitution text from a tempfile — so every
   filesystem-based check inside the validator is a silent no-op in the watchdog.
-  (That same gap means `check_gourmand_ci_gate` has never run here either; see
-  RT #1484.)
+- **Gourmand CI gate dimension** (RT #1484, closing the gap RT #1468 left open).
+  `check_gourmand_gate()` verifies over the API that a repo's CI actually calls
+  gatehouse's reusable `gourmand.yml` — not a dead `cargo install` pattern, not
+  an inlined copy-paste of the job. Applies to the MCP Server and CLI Tool
+  profiles. Reported per repo, counted as `gourmand_failing`, and shown as the
+  `R` gate light.
+
+  This existed as `check_gourmand_ci_gate()` in the validator, but the tempfile
+  problem above meant it had **never once run in the watchdog** — RT #1468's
+  fleet-wide guardrail was only ever enforced in per-repo CI. Running it fleet-wide
+  for the first time surfaced three false positives in the original, fixed
+  upstream in crunchtools/constitution.
 
 ### Changed
-- Repos failing the changelog check are now counted as unhealthy.
+- Repos failing the changelog or Gourmand gate check are now counted as unhealthy.
 - Synced the vendored `validate-constitution.py` with crunchtools/constitution.
 
 ## [1.0.0] - 2026-03-10
