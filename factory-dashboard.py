@@ -190,6 +190,7 @@ class FactoryScene extends Phaser.Scene {
                 repo.version_sync === 0 ? (repo.version || 'MISMATCH') : 'n/a'),
             'Artifacts: ' + (repo.artifact_sync === 1 ? 'synced' : repo.artifact_sync === 0 ? 'MISMATCH' : 'n/a'),
             'Constitution: ' + (repo.constitution === 1 ? 'PASS' : repo.constitution === 0 ? 'FAIL' : 'n/a'),
+            'Changelog: ' + (repo.changelog === 1 ? 'PASS' : repo.changelog === 0 ? 'FAIL' : 'n/a'),
             'Issues: ' + (repo.issues_open || 0) + '  PRs: ' + (repo.prs_open || 0)
         ];
         this.tooltipTextObj.setText(lines.join('\\n'));
@@ -417,6 +418,7 @@ class FactoryScene extends Phaser.Scene {
             var fails = [];
             if (s.gha_failing) fails.push('GHA:' + s.gha_failing);
             if (s.constitution_failing) fails.push('Con:' + s.constitution_failing);
+            if (s.changelog_failing) fails.push('Chg:' + s.changelog_failing);
             if (s.version_failing) fails.push('Ver:' + s.version_failing);
             if (s.artifact_failing) fails.push('Art:' + s.artifact_failing);
             if (!this.failDetailText) {
@@ -562,7 +564,8 @@ class FactoryScene extends Phaser.Scene {
             { label: 'G', value: repo.gha },
             { label: 'V', value: repo.version_sync },
             { label: 'A', value: repo.artifact_sync },
-            { label: 'C', value: repo.constitution }
+            { label: 'C', value: repo.constitution },
+            { label: 'L', value: repo.changelog }
         ];
         var lightY = y + h - 22, lightSpacing = 20;
         var lightStartX = x + (w - (gates.length - 1) * lightSpacing) / 2;
