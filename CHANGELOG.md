@@ -8,6 +8,19 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+## [1.3.2] - 2026-09-20
+
+### Fixed
+
+- `build.yml` never triggered on version tags and never produced a semver
+  image tag -- only `push: branches: [main]` with `latest`/short-sha tags.
+  So no crunchtools/factory release, including v1.3.1, ever shipped a
+  version-tagged image to either registry; the registry-drift check was
+  correctly flagging a gap CI had never closed. Added a `tags: ["v*"]`
+  trigger and a `type=semver,pattern={{version}}` tag to both the Quay and
+  GHCR jobs. Cutting v1.3.2 is what puts the first real versioned factory
+  image in both registries.
+
 ## [1.3.1] - 2026-09-19
 
 ### Fixed
