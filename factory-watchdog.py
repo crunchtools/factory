@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -211,7 +212,11 @@ def extract_version_server(text: str) -> str | None:
 
 
 def versions_agree(versions: dict[str, str]) -> tuple[int, str]:
-    """Return (1, version) when every source reports the same version, else (0, mismatch)."""
+    """Return (1, version) when every source reports the same version, else (0, mismatch).
+
+    `versions` maps a source label (e.g. "pyproject.toml", "pypi") to the
+    version string found there; the labels only appear in the mismatch detail.
+    """
     unique = set(versions.values())
     if len(unique) == 1:
         return 1, next(iter(unique))
@@ -479,7 +484,7 @@ def workflow_listing(repo: str) -> list | None:
     return listing
 
 
-def iter_workflow_contents(repo: str, listing: list):
+def iter_workflow_contents(repo: str, listing: list) -> Iterator[tuple[str, str]]:
     """Yield (filename, comment-stripped text) for each readable YAML workflow.
 
     A generator so callers that stop at the first match fetch no further files.
@@ -495,7 +500,11 @@ def iter_workflow_contents(repo: str, listing: list):
 
 
 def gourmand_workflow_problems(name: str, content: str) -> list[str]:
-    """Return what is wrong with one workflow that references Gourmand."""
+    """Return what is wrong with one workflow that references Gourmand.
+
+    `name` is the workflow filename (used in the messages) and `content` its
+    comment-stripped YAML. Returns one message per problem; empty means clean.
+    """
     problems = []
     if any(
         re.search(pattern, content, re.IGNORECASE)
@@ -589,7 +598,11 @@ def tag_commit_date(repo: str, sha: str) -> str | None:
 
 
 def classify_tags(repo: str, tags: list, released: set) -> tuple[list[str], list[str]]:
-    """Split tags into (post-cutoff vX.Y.Z tags with no release, bare X.Y.Z tags)."""
+    """Split tags into (post-cutoff vX.Y.Z tags with no release, bare X.Y.Z tags).
+
+    `tags` is the GitHub tags API payload (dicts with "name" and "commit.sha");
+    `released` is the set of tag names that already have a non-draft release.
+    """
     missing = []
     malformed = []
     for tag in tags:
@@ -817,7 +830,12 @@ def run_count_checks(repo_results: dict[str, dict], repo_names: list[str]) -> No
 
 
 def build_summary(repo_results: dict[str, dict], mcp_repos: list[str]) -> dict:
-    """Aggregate counts for the status file's summary block (Nagios reads this)."""
+    """Aggregate counts for the status file's summary block (Nagios reads this).
+
+    Expects every entry's "healthy" flag to be set already; main() computes it
+    from HEALTH_KEYS for fresh results, and merged entries carry theirs from
+    the previous status file.
+    """
     total_repos = len(repo_results)
     healthy_repos = sum(1 for r in repo_results.values() if r["healthy"])
     failing_repos = total_repos - healthy_repos
