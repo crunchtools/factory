@@ -15,7 +15,8 @@ import json
 import os
 import subprocess
 import sys
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 STATUS_FILE = os.environ.get("STATUS_FILE", "/data/factory-status.json")
@@ -715,18 +716,18 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == "/health":
-            self.send_response(200)
+            self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/plain")
             self.end_headers()
             self.wfile.write(b"ok\n")
             return
 
         if self.path == "/api/status":
-            data = load_status()
-            self.send_response(200 if data else 503)
+            status = load_status()
+            self.send_response(HTTPStatus.OK if status else HTTPStatus.SERVICE_UNAVAILABLE)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(json.dumps(data or {}).encode())
+            self.wfile.write(json.dumps(status or {}).encode())
             return
 
         if self.path == "/api/refresh":
@@ -748,7 +749,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             subprocess.Popen(
                 cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
-            self.send_response(202)
+            self.send_response(HTTPStatus.ACCEPTED)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
             resp = {"status": "triggered", "repos": failing or "all"}
@@ -756,7 +757,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
         # Default: serve game dashboard
-        self.send_response(200)
+        self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.end_headers()
         self.wfile.write(GAME_HTML.encode())

@@ -8,6 +8,25 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+### Added
+
+- Gourmand CI gate (`.github/workflows/gourmand.yml`, gatehouse v0.9.0) and
+  `gourmand` + `ruff-check` pre-commit hooks, with ruff configured in
+  `pyproject.toml` (RT #1509).
+
+### Changed
+
+- Cleared the Gourmand baseline in the watchdog and dashboard without
+  changing behaviour: split `main()` and the gate/release checks into
+  smaller functions, extracted the shared version-agreement and workflow
+  iteration code, narrowed three `except Exception` fallbacks to the errors
+  they actually handle, named the subprocess timeouts, used `HTTPStatus`
+  in the dashboard, and dropped the ruler comments. Output and the status
+  file schema are unchanged.
+- The vendored `validate-constitution.py` is excluded from Gourmand; it is
+  owned upstream in crunchtools/constitution.
+- Constitution now inherits crunchtools/constitution v1.17.0.
+
 ## [1.3.2] - 2026-09-20
 
 ### Fixed

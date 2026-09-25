@@ -1,0 +1,10 @@
+check = "CH001-absolute_paths"
+classification = "by_design"
+
+[[locations]]
+path = "factory-watchdog.py"
+justification = "VALIDATOR_PATH is where the Containerfile COPYs the vendored validate-constitution.py inside the image. It is fixed by the image layout, not a host path, so there is nothing for an operator to configure."
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "/api/refresh launches /usr/local/bin/factory-watchdog, the path the Containerfile installs it to and the same one factory-watchdog.service's ExecStart uses. Fixed by the image layout."

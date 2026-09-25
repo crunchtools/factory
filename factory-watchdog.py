@@ -31,6 +31,7 @@ No pip dependencies — stdlib only + gh CLI.
 """
 
 import base64
+import http.client
 import json
 import os
 import re
@@ -39,7 +40,8 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-from datetime import datetime, timezone
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "crunchtools")
@@ -47,21 +49,27 @@ STATUS_FILE = os.environ.get("STATUS_FILE", "/data/factory-status.json")
 
 VALIDATOR_PATH = "/usr/local/lib/validate-constitution.py"
 
+GH_TIMEOUT_SECONDS = 30
+VALIDATOR_TIMEOUT_SECONDS = 30
+
+# What fetch_json can raise for an unreachable, erroring, or non-JSON endpoint.
+# URLError and socket timeouts are OSError; JSONDecodeError is ValueError;
+# AttributeError covers a JSON body that is not an object.
+FETCH_ERRORS = (OSError, ValueError, AttributeError, http.client.HTTPException)
+
 # PyPI package names follow the pattern mcp-{name}-crunchtools
 PYPI_PREFIX = "mcp-"
 PYPI_SUFFIX = "-crunchtools"
 
 
-# ---------------------------------------------------------------------------
 # GitHub helpers (via gh CLI)
-# ---------------------------------------------------------------------------
 
 def gh_api(endpoint: str) -> dict | list | None:
     """Call the GitHub API via gh CLI. Returns parsed JSON or None on error."""
     try:
         result = subprocess.run(
             ["gh", "api", endpoint],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=GH_TIMEOUT_SECONDS,
         )
         if result.returncode != 0:
             return None
@@ -76,11 +84,11 @@ def gh_api_paginated(endpoint: str, per_page: int = 100) -> list:
     page = 1
     sep = "&" if "?" in endpoint else "?"
     while True:
-        data = gh_api(f"{endpoint}{sep}per_page={per_page}&page={page}")
-        if not data or not isinstance(data, list) or len(data) == 0:
+        page_items = gh_api(f"{endpoint}{sep}per_page={per_page}&page={page}")
+        if not page_items or not isinstance(page_items, list) or len(page_items) == 0:
             break
-        all_results.extend(data)
-        if len(data) < per_page:
+        all_results.extend(page_items)
+        if len(page_items) < per_page:
             break
         page += 1
     return all_results
@@ -88,18 +96,17 @@ def gh_api_paginated(endpoint: str, per_page: int = 100) -> list:
 
 def gh_file_content(repo: str, path: str) -> str | None:
     """Fetch a file from GitHub and return its decoded text content."""
-    data = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/{path}")
-    if not data or "content" not in data:
+    file_meta = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/{path}")
+    if not file_meta or "content" not in file_meta:
         return None
     try:
-        return base64.b64decode(data["content"]).decode("utf-8")
-    except Exception:
+        return base64.b64decode(file_meta["content"]).decode("utf-8")
+    except (ValueError, TypeError):
+        # binascii.Error and UnicodeDecodeError are both ValueError subclasses.
         return None
 
 
-# ---------------------------------------------------------------------------
 # Auto-discovery
-# ---------------------------------------------------------------------------
 
 def parse_constitution_header(text: str) -> dict[str, str]:
     """Extract key-value pairs from the blockquote header of a constitution."""
@@ -159,19 +166,17 @@ def discover_repos() -> list[dict]:
     return discovered
 
 
-# ---------------------------------------------------------------------------
 # Check 1: GHA Workflow Status
-# ---------------------------------------------------------------------------
 
 def check_gha_status(repo: str) -> int:
     """Return 1 if all latest workflow runs on main are green, 0 otherwise."""
-    data = gh_api(
+    runs_page = gh_api(
         f"repos/{GITHUB_ORG}/{repo}/actions/runs?branch=main&per_page=10"
     )
-    if not data or "workflow_runs" not in data:
+    if not runs_page or "workflow_runs" not in runs_page:
         return 0
 
-    runs = data["workflow_runs"]
+    runs = runs_page["workflow_runs"]
     if not runs:
         return 1
 
@@ -189,9 +194,7 @@ def check_gha_status(repo: str) -> int:
     return 1
 
 
-# ---------------------------------------------------------------------------
 # Check 2: Version Sync (MCP Server repos only)
-# ---------------------------------------------------------------------------
 
 def extract_version_pyproject(text: str) -> str | None:
     match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
@@ -206,6 +209,19 @@ def extract_version_init(text: str) -> str | None:
 def extract_version_server(text: str) -> str | None:
     match = re.search(r'version\s*=\s*"([^"]+)"', text)
     return match.group(1) if match else None
+
+
+def versions_agree(versions: dict[str, str]) -> tuple[int, str]:
+    """Return (1, version) when every source reports the same version, else (0, mismatch).
+
+    `versions` maps a source label (e.g. "pyproject.toml", "pypi") to the
+    version string found there; the labels only appear in the mismatch detail.
+    """
+    unique = set(versions.values())
+    if len(unique) == 1:
+        return 1, next(iter(unique))
+    detail = ", ".join(f"{k}={v}" for k, v in versions.items())
+    return 0, f"mismatch: {detail}"
 
 
 def check_version_sync(repo: str) -> tuple[int, str]:
@@ -231,17 +247,10 @@ def check_version_sync(repo: str) -> tuple[int, str]:
     if not found:
         return 0, "no versions extracted"
 
-    unique = set(found.values())
-    if len(unique) == 1:
-        return 1, next(iter(unique))
-    else:
-        detail = ", ".join(f"{k}={v}" for k, v in found.items())
-        return 0, f"mismatch: {detail}"
+    return versions_agree(found)
 
 
-# ---------------------------------------------------------------------------
 # Check 3: Artifact Sync (MCP Server repos only)
-# ---------------------------------------------------------------------------
 
 SEMVER_RE = re.compile(r"^\d+\.\d+(\.\d+)?$")
 
@@ -251,9 +260,9 @@ def is_semver_tag(name: str) -> bool:
 
 
 def get_github_release_version(repo: str) -> str | None:
-    data = gh_api(f"repos/{GITHUB_ORG}/{repo}/releases/latest")
-    if data and "tag_name" in data:
-        tag = data["tag_name"]
+    release = gh_api(f"repos/{GITHUB_ORG}/{repo}/releases/latest")
+    if release and "tag_name" in release:
+        tag = release["tag_name"]
         return tag.lstrip("v") if tag else None
 
     tags = gh_api(f"repos/{GITHUB_ORG}/{repo}/tags?per_page=10")
@@ -304,17 +313,17 @@ def get_pypi_version(repo: str) -> str | None:
     package = f"{PYPI_PREFIX}{repo.removeprefix('mcp-')}{PYPI_SUFFIX}"
     url = f"https://pypi.org/pypi/{package}/json"
     try:
-        data = fetch_json(url)
-        return data.get("info", {}).get("version")
-    except Exception:
+        pypi_meta = fetch_json(url)
+        return pypi_meta.get("info", {}).get("version")
+    except FETCH_ERRORS:
         return None
 
 
 def get_quay_latest_tag(repo: str) -> str | None:
     url = f"https://quay.io/api/v1/repository/{GITHUB_ORG}/{repo}/tag/?limit=20&onlyActiveTags=true"
     try:
-        data = fetch_json(url)
-        tags = data.get("tags", [])
+        quay_listing = fetch_json(url)
+        tags = quay_listing.get("tags", [])
         for tag in tags:
             name = tag.get("name", "").lstrip("v")
             if re.match(r"^\d+\.\d+\.\d+$", name):
@@ -324,23 +333,23 @@ def get_quay_latest_tag(repo: str) -> str | None:
             if re.match(r"^\d+\.\d+$", name):
                 return name
         return None
-    except Exception:
+    except FETCH_ERRORS:
         return None
 
 
 def get_ghcr_latest_tag(repo: str) -> str | None:
-    data = gh_api(
+    package_versions = gh_api(
         f"orgs/{GITHUB_ORG}/packages/container/{repo}/versions?per_page=10"
     )
-    if not data or not isinstance(data, list):
+    if not package_versions or not isinstance(package_versions, list):
         return None
-    for version in data:
+    for version in package_versions:
         tags = version.get("metadata", {}).get("container", {}).get("tags", [])
         for tag in tags:
             name = tag.lstrip("v")
             if re.match(r"^\d+\.\d+\.\d+$", name):
                 return name
-    for version in data:
+    for version in package_versions:
         tags = version.get("metadata", {}).get("container", {}).get("tags", [])
         for tag in tags:
             name = tag.lstrip("v")
@@ -389,17 +398,10 @@ def check_artifact_sync(repo: str) -> tuple[int, str]:
     if ghcr_ver:
         versions["ghcr"] = ghcr_ver
 
-    unique = set(versions.values())
-    detail = ", ".join(f"{k}={v}" for k, v in versions.items())
-    if len(unique) == 1:
-        return 1, next(iter(unique))
-    else:
-        return 0, f"mismatch: {detail}"
+    return versions_agree(versions)
 
 
-# ---------------------------------------------------------------------------
 # Check 4: Constitution Validation
-# ---------------------------------------------------------------------------
 
 def check_constitution(repo_info: dict) -> tuple[int, str]:
     """Validate constitution via validate-constitution.py. Returns (score, violations)."""
@@ -407,14 +409,14 @@ def check_constitution(repo_info: dict) -> tuple[int, str]:
     if content is None:
         return 1, ""
 
-    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as scratch:
+        scratch.write(content)
+        tmp_path = scratch.name
 
     try:
         result = subprocess.run(
             ["python3", VALIDATOR_PATH, tmp_path],
-            capture_output=True, text=True, timeout=30,
+            capture_output=True, text=True, timeout=VALIDATOR_TIMEOUT_SECONDS,
         )
         if result.returncode == 0:
             return 1, ""
@@ -426,9 +428,7 @@ def check_constitution(repo_info: dict) -> tuple[int, str]:
         Path(tmp_path).unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------------------
 # Check 5: Changelog
-# ---------------------------------------------------------------------------
 
 def check_changelog(repo: str) -> tuple[int, str]:
     """Verify CHANGELOG.md exists and satisfies Section II. Returns (score, detail).
@@ -453,9 +453,7 @@ def check_changelog(repo: str) -> tuple[int, str]:
     return 1, ""
 
 
-# ---------------------------------------------------------------------------
 # Check 6: Gourmand CI gate
-# ---------------------------------------------------------------------------
 
 GOURMAND_DEAD_PATTERNS = [
     r"cargo\s+install.*gourmand",
@@ -478,6 +476,51 @@ def strip_yaml_comments(text: str) -> str:
     )
 
 
+def workflow_listing(repo: str) -> list | None:
+    """Return the repo's .github/workflows directory listing, or None if absent."""
+    listing = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/.github/workflows")
+    if not listing or not isinstance(listing, list):
+        return None
+    return listing
+
+
+def iter_workflow_contents(repo: str, listing: list) -> Iterator[tuple[str, str]]:
+    """Yield (filename, comment-stripped text) for each readable YAML workflow.
+
+    A generator so callers that stop at the first match fetch no further files.
+    """
+    for entry in listing:
+        name = entry.get("name", "")
+        if not name.endswith((".yml", ".yaml")):
+            continue
+        raw = gh_file_content(repo, f".github/workflows/{name}")
+        if raw is None:
+            continue
+        yield name, strip_yaml_comments(raw)
+
+
+def gourmand_workflow_problems(name: str, content: str) -> list[str]:
+    """Return what is wrong with one workflow that references Gourmand.
+
+    `name` is the workflow filename (used in the messages) and `content` its
+    comment-stripped YAML. Returns one message per problem; empty means clean.
+    """
+    problems = []
+    if any(
+        re.search(pattern, content, re.IGNORECASE)
+        for pattern in GOURMAND_DEAD_PATTERNS
+    ):
+        problems.append(f"{name} uses a dead Gourmand pattern")
+    # gatehouse hosts the reusable workflow, so it references its own copy
+    # with a local path. Everyone else must point at crunchtools/gatehouse.
+    if not re.search(
+        r"uses:\s*(?:crunchtools/gatehouse|\.)/\.github/workflows/gourmand\.yml",
+        content,
+    ):
+        problems.append(f"{name} inlines the job instead of calling gatehouse")
+    return problems
+
+
 def check_gourmand_gate(repo: str) -> tuple[int, str]:
     """Verify the Gourmand CI gate is really wired up. Returns (score, detail).
 
@@ -488,41 +531,21 @@ def check_gourmand_gate(repo: str) -> tuple[int, str]:
     gate RT #1468 installed was only ever enforced in per-repo CI. This is the
     fleet-wide half, over the API.
     """
-    listing = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/.github/workflows")
-    if not listing or not isinstance(listing, list):
+    listing = workflow_listing(repo)
+    if listing is None:
         return 0, "no .github/workflows directory"
 
     problems = []
     found_gourmand = False
 
-    for entry in listing:
-        name = entry.get("name", "")
-        if not name.endswith((".yml", ".yaml")):
-            continue
-        raw = gh_file_content(repo, f".github/workflows/{name}")
-        if raw is None:
-            continue
-        content = strip_yaml_comments(raw)
+    for name, content in iter_workflow_contents(repo, listing):
         if not re.search(r"gourmand", content, re.IGNORECASE):
             continue
+        found_gourmand = True
         # The reusable definition itself IS the gate; it has no gate to call.
         if re.search(r"^\s*workflow_call:", content, re.MULTILINE):
-            found_gourmand = True
             continue
-
-        found_gourmand = True
-        if any(
-            re.search(pattern, content, re.IGNORECASE)
-            for pattern in GOURMAND_DEAD_PATTERNS
-        ):
-            problems.append(f"{name} uses a dead Gourmand pattern")
-        # gatehouse hosts the reusable workflow, so it references its own copy
-        # with a local path. Everyone else must point at crunchtools/gatehouse.
-        if not re.search(
-            r"uses:\s*(?:crunchtools/gatehouse|\.)/\.github/workflows/gourmand\.yml",
-            content,
-        ):
-            problems.append(f"{name} inlines the job instead of calling gatehouse")
+        problems.extend(gourmand_workflow_problems(name, content))
 
     if not found_gourmand:
         return 0, "no CI workflow references Gourmand"
@@ -531,9 +554,7 @@ def check_gourmand_gate(repo: str) -> tuple[int, str]:
     return 1, ""
 
 
-# ---------------------------------------------------------------------------
 # Check 7: GitHub Releases
-# ---------------------------------------------------------------------------
 
 # Constitution 1.15.0 scoped the Section II release requirement and made it
 # forward-looking. Tags older than this are deliberately out of scope: a release
@@ -552,18 +573,11 @@ def is_distribution_bearing(repo: str) -> bool:
     profile allowlist would drift the moment a repo gained or dropped a
     publish job; this cannot.
     """
-    listing = gh_api(f"repos/{GITHUB_ORG}/{repo}/contents/.github/workflows")
-    if not listing or not isinstance(listing, list):
+    listing = workflow_listing(repo)
+    if listing is None:
         return False
 
-    for entry in listing:
-        name = entry.get("name", "")
-        if not name.endswith((".yml", ".yaml")):
-            continue
-        raw = gh_file_content(repo, f".github/workflows/{name}")
-        if raw is None:
-            continue
-        content = strip_yaml_comments(raw)
+    for _name, content in iter_workflow_contents(repo, listing):
         # The `on:` block runs from `on:` to the next top-level key. Scoping to
         # it matters: `github.event.release.tag_name` appears in the steps of
         # workflows that are not release-triggered at all.
@@ -576,11 +590,40 @@ def is_distribution_bearing(repo: str) -> bool:
 
 def tag_commit_date(repo: str, sha: str) -> str | None:
     """Return the YYYY-MM-DD committer date for a tag's commit, or None."""
-    data = gh_api(f"repos/{GITHUB_ORG}/{repo}/commits/{sha}")
-    if not isinstance(data, dict):
+    commit = gh_api(f"repos/{GITHUB_ORG}/{repo}/commits/{sha}")
+    if not isinstance(commit, dict):
         return None
-    date = data.get("commit", {}).get("committer", {}).get("date")
+    date = commit.get("commit", {}).get("committer", {}).get("date")
     return date[:10] if date else None
+
+
+def classify_tags(repo: str, tags: list, released: set) -> tuple[list[str], list[str]]:
+    """Split tags into (post-cutoff vX.Y.Z tags with no release, bare X.Y.Z tags).
+
+    `tags` is the GitHub tags API payload (dicts with "name" and "commit.sha");
+    `released` is the set of tag names that already have a non-draft release.
+    """
+    missing = []
+    malformed = []
+    for tag in tags:
+        name = tag.get("name", "")
+        if not VERSION_TAG_RE.match(name):
+            # A release under a bare `0.4.0` reads as a missing `v0.4.0` to any
+            # audit matching vX.Y.Z, and leaves a junk tag behind. 1.15.0 makes
+            # the `v` explicit, so report it rather than skipping past it.
+            if re.match(r"^\d+\.\d+\.\d+$", name):
+                malformed.append(name)
+            continue
+        if name in released:
+            continue
+        sha = tag.get("commit", {}).get("sha")
+        date = tag_commit_date(repo, sha) if sha else None
+        # Undatable tags are treated as historical. A check that guesses errs
+        # toward silence here: the cost of a missed old tag is nil, the cost of
+        # a permanent false red is that nobody reads the light.
+        if date and date >= RELEASE_CUTOFF:
+            missing.append(name)
+    return missing, malformed
 
 
 def check_releases(repo: str) -> tuple[int | None, str]:
@@ -604,26 +647,7 @@ def check_releases(repo: str) -> tuple[int | None, str]:
         if isinstance(r, dict) and not r.get("draft")
     }
 
-    missing = []
-    malformed = []
-    for tag in tags:
-        name = tag.get("name", "")
-        if not VERSION_TAG_RE.match(name):
-            # A release under a bare `0.4.0` reads as a missing `v0.4.0` to any
-            # audit matching vX.Y.Z, and leaves a junk tag behind. 1.15.0 makes
-            # the `v` explicit, so report it rather than skipping past it.
-            if re.match(r"^\d+\.\d+\.\d+$", name):
-                malformed.append(name)
-            continue
-        if name in released:
-            continue
-        sha = tag.get("commit", {}).get("sha")
-        date = tag_commit_date(repo, sha) if sha else None
-        # Undatable tags are treated as historical. A check that guesses errs
-        # toward silence here: the cost of a missed old tag is nil, the cost of
-        # a permanent false red is that nobody reads the light.
-        if date and date >= RELEASE_CUTOFF:
-            missing.append(name)
+    missing, malformed = classify_tags(repo, tags, released)
 
     problems = []
     if missing:
@@ -635,31 +659,27 @@ def check_releases(repo: str) -> tuple[int | None, str]:
     return 1, ""
 
 
-# ---------------------------------------------------------------------------
 # Check 8: Open GitHub Issues & PRs
-# ---------------------------------------------------------------------------
 
 def check_open_issues(repo: str) -> int:
-    data = gh_api(
+    issues = gh_api(
         f"repos/{GITHUB_ORG}/{repo}/issues?state=open&per_page=100"
     )
-    if not data or not isinstance(data, list):
+    if not issues or not isinstance(issues, list):
         return 0
-    return sum(1 for issue in data if "pull_request" not in issue)
+    return sum(1 for issue in issues if "pull_request" not in issue)
 
 
 def check_open_prs(repo: str) -> int:
-    data = gh_api(
+    pulls = gh_api(
         f"repos/{GITHUB_ORG}/{repo}/pulls?state=open&per_page=100"
     )
-    if not data or not isinstance(data, list):
+    if not pulls or not isinstance(pulls, list):
         return 0
-    return len(data)
+    return len(pulls)
 
 
-# ---------------------------------------------------------------------------
 # JSON status output
-# ---------------------------------------------------------------------------
 
 def load_status() -> dict | None:
     """Load the existing status JSON file."""
@@ -684,29 +704,201 @@ def write_status(status: dict) -> None:
     print(f"Wrote status to {STATUS_FILE}")
 
 
-# ---------------------------------------------------------------------------
 # Main
-# ---------------------------------------------------------------------------
+
+# Any of these at 0 marks a repo unhealthy. None means the check did not apply.
+HEALTH_KEYS = (
+    "gha", "constitution", "version_sync", "artifact_sync",
+    "changelog", "gourmand_gate", "releases",
+)
+
+
+def parse_only_arg(argv: list[str]) -> set[str] | None:
+    """Return the repo set from --only=a,b for a selective scan, or None."""
+    only_repos: set[str] | None = None
+    for arg in argv:
+        if arg.startswith("--only="):
+            only_repos = set(arg[len("--only="):].split(","))
+            print(f"Selective scan: {', '.join(sorted(only_repos))}")
+    return only_repos
+
+
+def new_repo_result(repo: dict) -> dict:
+    """Blank per-repo result record; its keys are the status-file schema."""
+    return {
+        "profile": repo["profile"],
+        "fork": repo.get("fork", False),
+        "gha": None,
+        "version_sync": None,
+        "version": None,
+        "artifact_sync": None,
+        "constitution": None,
+        "constitution_violations": "",
+        "changelog": None,
+        "changelog_detail": "",
+        "gourmand_gate": None,
+        "gourmand_gate_detail": "",
+        "releases": None,
+        "releases_detail": "",
+        "issues_open": 0,
+        "prs_open": 0,
+        "healthy": True,
+    }
+
+
+def status_label(score: int | None) -> str:
+    """Map a check score to its log label: 1 -> OK, 0 -> FAIL, None (not applicable) -> n/a."""
+    return "n/a" if score is None else ("OK" if score == 1 else "FAIL")
+
+
+def print_result(name: str, score: int | None, detail: str) -> None:
+    """Print one repo's check line, with the detail in parentheses when there is one."""
+    print(f"  {name}: {status_label(score)}" + (f" ({detail})" if detail else ""))
+
+
+def run_sync_checks(repo_results: dict[str, dict], repo_names: list[str],
+                    mcp_repos: list[str]) -> None:
+    """Checks 1-3: GHA status for every repo, version and artifact sync for MCP repos."""
+    print("\n--- GHA Workflow Status ---")
+    for name in repo_names:
+        score = check_gha_status(name)
+        print(f"  {name}: {status_label(score)}")
+        repo_results[name]["gha"] = score
+
+    print("\n--- Version Sync ---")
+    for name in mcp_repos:
+        score, version_info = check_version_sync(name)
+        print(f"  {name}: {status_label(score)} ({version_info})")
+        repo_results[name]["version_sync"] = score
+        repo_results[name]["version"] = version_info
+
+    print("\n--- Artifact Sync ---")
+    for name in mcp_repos:
+        score, artifact_info = check_artifact_sync(name)
+        print(f"  {name}: {status_label(score)} ({artifact_info})")
+        repo_results[name]["artifact_sync"] = score
+
+
+def run_compliance_checks(repo_results: dict[str, dict], repos: list[dict]) -> None:
+    """Checks 4-7: constitution, changelog, Gourmand gate, releases."""
+    print("\n--- Constitution Validation ---")
+    for repo in repos:
+        name = repo["name"]
+        score, violations = check_constitution(repo)
+        print(f"  {name}: {status_label(score)}")
+        if violations:
+            print(f"    {violations[:200]}")
+        repo_results[name]["constitution"] = score
+        repo_results[name]["constitution_violations"] = violations
+
+    print("\n--- Changelog ---")
+    for repo in repos:
+        name = repo["name"]
+        score, detail = check_changelog(name)
+        print_result(name, score, detail)
+        repo_results[name]["changelog"] = score
+        repo_results[name]["changelog_detail"] = detail
+
+    print("\n--- Gourmand CI Gate ---")
+    for repo in repos:
+        name = repo["name"]
+        if repo_results[name]["profile"] not in GOURMAND_GATE_PROFILES:
+            continue
+        score, detail = check_gourmand_gate(name)
+        print_result(name, score, detail)
+        repo_results[name]["gourmand_gate"] = score
+        repo_results[name]["gourmand_gate_detail"] = detail
+
+    print("\n--- GitHub Releases ---")
+    for repo in repos:
+        name = repo["name"]
+        score, detail = check_releases(name)
+        print_result(name, score, detail)
+        repo_results[name]["releases"] = score
+        repo_results[name]["releases_detail"] = detail
+
+
+def run_count_checks(repo_results: dict[str, dict], repo_names: list[str]) -> None:
+    """Check 8: open issue and PR counts."""
+    for header, counter, key in (
+        ("Open Issues", check_open_issues, "issues_open"),
+        ("Open Pull Requests", check_open_prs, "prs_open"),
+    ):
+        print(f"\n--- {header} ---")
+        for name in repo_names:
+            count = counter(name)
+            print(f"  {name}: {count}")
+            repo_results[name][key] = count
+
+
+def build_summary(repo_results: dict[str, dict], mcp_repos: list[str]) -> dict:
+    """Aggregate counts for the status file's summary block (Nagios reads this).
+
+    Expects every entry's "healthy" flag to be set already; main() computes it
+    from HEALTH_KEYS for fresh results, and merged entries carry theirs from
+    the previous status file.
+    """
+    total_repos = len(repo_results)
+    healthy_repos = sum(1 for r in repo_results.values() if r["healthy"])
+    failing_repos = total_repos - healthy_repos
+
+    def failing(key: str) -> int:
+        return sum(1 for r in repo_results.values() if r.get(key) == 0)
+
+    return {
+        "health": 1 if failing_repos == 0 else 0,
+        "repos_total": total_repos,
+        "repos_healthy": healthy_repos,
+        "repos_failing": failing_repos,
+        "gha_failing": failing("gha"),
+        "constitution_failing": failing("constitution"),
+        "changelog_failing": failing("changelog"),
+        "gourmand_failing": failing("gourmand_gate"),
+        "releases_failing": failing("releases"),
+        "version_failing": sum(
+            1 for n in mcp_repos if repo_results[n]["version_sync"] == 0
+        ),
+        "artifact_failing": sum(
+            1 for n in mcp_repos if repo_results[n]["artifact_sync"] == 0
+        ),
+    }
+
+
+SUMMARY_LABELS = (
+    ("gha_failing", "GHA failing"),
+    ("constitution_failing", "Constitution failing"),
+    ("changelog_failing", "Changelog failing"),
+    ("gourmand_failing", "Gourmand gate failing"),
+    ("releases_failing", "Releases failing"),
+    ("version_failing", "Version sync failing"),
+    ("artifact_failing", "Artifact sync failing"),
+)
+
+
+def print_summary(summary: dict) -> None:
+    print(f"\n{'=' * 60}")
+    print(f"Summary: {summary['repos_healthy']}/{summary['repos_total']} repos healthy")
+    if not summary["health"]:
+        print("  Issues:")
+        for key, label in SUMMARY_LABELS:
+            if summary[key]:
+                print(f"    {label}: {summary[key]}")
+    print("Done.")
+
 
 def main() -> int:
     print("=" * 60)
     print("CrunchTools Factory Watchdog")
     print("=" * 60)
 
-    # Parse --only flag for selective scanning
-    only_repos: set[str] | None = None
-    for arg in sys.argv[1:]:
-        if arg.startswith("--only="):
-            only_repos = set(arg[len("--only="):].split(","))
-            print(f"Selective scan: {', '.join(sorted(only_repos))}")
+    only_repos = parse_only_arg(sys.argv[1:])
 
-    # --- Auto-discover repos ---
     repos = discover_repos()
     if not repos:
         print("ERROR: No repos discovered, aborting", file=sys.stderr)
         return 1
 
-    # Load existing status for merging when doing selective scan
+    # A selective scan merges its results into the existing status file.
     existing_status = None
     if only_repos:
         existing_status = load_status()
@@ -717,190 +909,29 @@ def main() -> int:
 
     repo_names = [r["name"] for r in repos]
     mcp_repos = [r["name"] for r in repos if r["profile"] == "MCP Server"]
+    repo_results: dict[str, dict] = {r["name"]: new_repo_result(r) for r in repos}
 
-    # Per-repo results accumulator
-    repo_results: dict[str, dict] = {}
-    for r in repos:
-        repo_results[r["name"]] = {
-            "profile": r["profile"],
-            "fork": r.get("fork", False),
-            "gha": None,
-            "version_sync": None,
-            "version": None,
-            "artifact_sync": None,
-            "constitution": None,
-            "constitution_violations": "",
-            "changelog": None,
-            "changelog_detail": "",
-            "gourmand_gate": None,
-            "gourmand_gate_detail": "",
-            "releases": None,
-            "releases_detail": "",
-            "issues_open": 0,
-            "prs_open": 0,
-            "healthy": True,
-        }
+    run_sync_checks(repo_results, repo_names, mcp_repos)
+    run_compliance_checks(repo_results, repos)
+    run_count_checks(repo_results, repo_names)
 
-    # --- Check 1: GHA Status ---
-    print("\n--- GHA Workflow Status ---")
-    for name in repo_names:
-        score = check_gha_status(name)
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status}")
-        repo_results[name]["gha"] = score
+    for res in repo_results.values():
+        res["healthy"] = not any(res.get(key) == 0 for key in HEALTH_KEYS)
 
-    # --- Check 2: Version Sync (MCP repos) ---
-    print("\n--- Version Sync ---")
-    for name in mcp_repos:
-        score, version_info = check_version_sync(name)
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status} ({version_info})")
-        repo_results[name]["version_sync"] = score
-        repo_results[name]["version"] = version_info
-
-    # --- Check 3: Artifact Sync (MCP repos) ---
-    print("\n--- Artifact Sync ---")
-    for name in mcp_repos:
-        score, artifact_info = check_artifact_sync(name)
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status} ({artifact_info})")
-        repo_results[name]["artifact_sync"] = score
-
-    # --- Check 4: Constitution Validation ---
-    print("\n--- Constitution Validation ---")
-    repo_map = {r["name"]: r for r in repos}
-    for name in repo_names:
-        score, violations = check_constitution(repo_map[name])
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status}")
-        if violations:
-            print(f"    {violations[:200]}")
-        repo_results[name]["constitution"] = score
-        repo_results[name]["constitution_violations"] = violations
-
-    # --- Check 5: Changelog ---
-    print("\n--- Changelog ---")
-    for name in repo_names:
-        score, detail = check_changelog(name)
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
-        repo_results[name]["changelog"] = score
-        repo_results[name]["changelog_detail"] = detail
-
-    # --- Check 6: Gourmand CI gate (MCP Server and CLI Tool profiles only) ---
-    print("\n--- Gourmand CI Gate ---")
-    for name in repo_names:
-        if repo_results[name]["profile"] not in GOURMAND_GATE_PROFILES:
-            continue
-        score, detail = check_gourmand_gate(name)
-        status = "OK" if score == 1 else "FAIL"
-        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
-        repo_results[name]["gourmand_gate"] = score
-        repo_results[name]["gourmand_gate_detail"] = detail
-
-    # --- Check 7: GitHub Releases (distribution-bearing repos only) ---
-    print("\n--- GitHub Releases ---")
-    for name in repo_names:
-        score, detail = check_releases(name)
-        status = "OK" if score == 1 else ("n/a" if score is None else "FAIL")
-        print(f"  {name}: {status}" + (f" ({detail})" if detail else ""))
-        repo_results[name]["releases"] = score
-        repo_results[name]["releases_detail"] = detail
-
-    # --- Check 8: Open Issues & PRs ---
-    print("\n--- Open Issues ---")
-    for name in repo_names:
-        count = check_open_issues(name)
-        print(f"  {name}: {count}")
-        repo_results[name]["issues_open"] = count
-
-    print("\n--- Open Pull Requests ---")
-    for name in repo_names:
-        count = check_open_prs(name)
-        print(f"  {name}: {count}")
-        repo_results[name]["prs_open"] = count
-
-    # --- Compute summary ---
-    for name, res in repo_results.items():
-        healthy = True
-        if res["gha"] == 0:
-            healthy = False
-        if res["constitution"] == 0:
-            healthy = False
-        if res["version_sync"] == 0:
-            healthy = False
-        if res["artifact_sync"] == 0:
-            healthy = False
-        if res["changelog"] == 0:
-            healthy = False
-        if res.get("gourmand_gate") == 0:
-            healthy = False
-        if res.get("releases") == 0:
-            healthy = False
-        res["healthy"] = healthy
-
-    # Merge selective scan results into existing status
     if only_repos and existing_status and existing_status.get("repos"):
         merged = dict(existing_status["repos"])
         merged.update(repo_results)
         repo_results = merged
         mcp_repos = [n for n, r in repo_results.items() if r["profile"] == "MCP Server"]
 
-    total_repos = len(repo_results)
-    healthy_repos = sum(1 for r in repo_results.values() if r["healthy"])
-    failing_repos = total_repos - healthy_repos
-    gha_failing = sum(1 for r in repo_results.values() if r["gha"] == 0)
-    constitution_failing = sum(1 for r in repo_results.values() if r["constitution"] == 0)
-    changelog_failing = sum(1 for r in repo_results.values() if r.get("changelog") == 0)
-    gourmand_failing = sum(
-        1 for r in repo_results.values() if r.get("gourmand_gate") == 0
-    )
-    releases_failing = sum(1 for r in repo_results.values() if r.get("releases") == 0)
-    version_failing = sum(1 for n in mcp_repos if repo_results[n]["version_sync"] == 0)
-    artifact_failing = sum(1 for n in mcp_repos if repo_results[n]["artifact_sync"] == 0)
-    all_healthy = failing_repos == 0
-
-    # --- Write JSON status ---
-    status_data = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+    summary = build_summary(repo_results, mcp_repos)
+    write_status({
+        "timestamp": datetime.now(UTC).isoformat(),
         "org": GITHUB_ORG,
-        "summary": {
-            "health": 1 if all_healthy else 0,
-            "repos_total": total_repos,
-            "repos_healthy": healthy_repos,
-            "repos_failing": failing_repos,
-            "gha_failing": gha_failing,
-            "constitution_failing": constitution_failing,
-            "changelog_failing": changelog_failing,
-            "gourmand_failing": gourmand_failing,
-            "releases_failing": releases_failing,
-            "version_failing": version_failing,
-            "artifact_failing": artifact_failing,
-        },
+        "summary": summary,
         "repos": repo_results,
-    }
-    write_status(status_data)
-
-    # --- Print summary ---
-    print(f"\n{'=' * 60}")
-    print(f"Summary: {healthy_repos}/{total_repos} repos healthy")
-    if not all_healthy:
-        print("  Issues:")
-        if gha_failing:
-            print(f"    GHA failing: {gha_failing}")
-        if constitution_failing:
-            print(f"    Constitution failing: {constitution_failing}")
-        if changelog_failing:
-            print(f"    Changelog failing: {changelog_failing}")
-        if gourmand_failing:
-            print(f"    Gourmand gate failing: {gourmand_failing}")
-        if releases_failing:
-            print(f"    Releases failing: {releases_failing}")
-        if version_failing:
-            print(f"    Version sync failing: {version_failing}")
-        if artifact_failing:
-            print(f"    Artifact sync failing: {artifact_failing}")
-    print("Done.")
+    })
+    print_summary(summary)
     return 0
 
 

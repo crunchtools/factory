@@ -3,7 +3,7 @@
 > **Version:** 1.0.0
 > **Ratified:** 2026-03-09
 > **Status:** Active
-> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.0.0
+> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.17.0
 > **Profile:** Container Image
 
 CrunchTools fleet watchdog — monitors GHA workflow status, version sync, artifact sync, and constitution compliance across all CrunchTools repos. Writes results to /data/factory-status.json, which factory-dashboard renders and Nagios alerts on via check_factory_status.sh.

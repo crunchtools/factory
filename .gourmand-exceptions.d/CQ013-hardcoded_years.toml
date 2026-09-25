@@ -1,0 +1,6 @@
+check = "CQ013-hardcoded_years"
+classification = "by_design"
+
+[[locations]]
+path = "factory-watchdog.py"
+justification = "RELEASE_CUTOFF = 2026-09-19 is the policy date constitution 1.15.0 set for the Section II release requirement; tags before it are deliberately out of scope (RT #1462). It is a fixed date by definition, and the comment above it says so."

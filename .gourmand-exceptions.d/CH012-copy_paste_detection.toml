@@ -1,0 +1,10 @@
+check = "CH012-copy_paste_detection"
+classification = "by_design"
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "load_status() is repeated in the two scripts on purpose. They are standalone stdlib-only executables installed without a .py suffix into /usr/local/bin, so there is no package or import path to share a module through, and adding one to save four lines would mean a packaging step this image does not have."
+
+[[locations]]
+path = "factory-watchdog.py"
+justification = "The remaining same-file pairs (check_version_sync/check_artifact_sync, check_artifact_sync/check_releases, check_constitution/check_changelog, gh_api_paginated/classify_tags) share only the statement shape of the fetch-then-early-return check idiom, not logic: each calls different endpoints, parses different payloads and returns different details. The genuinely duplicated parts were extracted in RT #1509 (versions_agree, workflow_listing/iter_workflow_contents, the issues/PRs counter loop)."

@@ -1,0 +1,6 @@
+check = "EV004-redundant_error_handling"
+classification = "by_design"
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "main() catches KeyboardInterrupt around serve_forever() so Ctrl-C in an interactive run prints a shutdown line and falls through to server_close() instead of dumping a traceback. It is the stop path, not swallowed error handling."
