@@ -1,13 +1,8 @@
 # Gourmand configuration (AI slop detection)
 # See https://gitlab.com/mattdm/gourmand for documentation
-
-[global]
-excluded_paths = [
-    ".git/**",
-    ".ruff_cache/**",
-    ".gourmand-cache/**",
-    ".github/**",
-]
+#
+# Path exclusions live in .gourmand-exceptions.d/globals.toml; gourmand ignores
+# [global] here. Keep this file: without it the exceptions directory is not loaded.
 
 [checks]
 

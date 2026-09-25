@@ -747,10 +747,12 @@ def new_repo_result(repo: dict) -> dict:
 
 
 def status_label(score: int | None) -> str:
+    """Map a check score to its log label: 1 -> OK, 0 -> FAIL, None (not applicable) -> n/a."""
     return "n/a" if score is None else ("OK" if score == 1 else "FAIL")
 
 
 def print_result(name: str, score: int | None, detail: str) -> None:
+    """Print one repo's check line, with the detail in parentheses when there is one."""
     print(f"  {name}: {status_label(score)}" + (f" ({detail})" if detail else ""))
 
 
