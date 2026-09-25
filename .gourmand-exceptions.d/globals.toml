@@ -1,0 +1,7 @@
+[global]
+excluded_paths = [
+    # Vendored verbatim from crunchtools/constitution and COPY'd into the image
+    # for the watchdog's constitution check. Quality is owned upstream; editing
+    # it here would fork it. Resync from upstream instead.
+    "validate-constitution.py",
+]

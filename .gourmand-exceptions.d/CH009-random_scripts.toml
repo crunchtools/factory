@@ -1,0 +1,10 @@
+check = "CH009-random_scripts"
+classification = "by_design"
+
+[[locations]]
+path = "factory-watchdog.py"
+justification = "The watchdog is one of the two programs this repo ships, not a helper script. The Containerfile COPYs it to /usr/local/bin/factory-watchdog and factory-watchdog.service runs it on a timer."
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "The dashboard is one of the two programs this repo ships, not a helper script. The Containerfile COPYs it to /usr/local/bin/factory-dashboard and factory-dashboard.service runs it."

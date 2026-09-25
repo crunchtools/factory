@@ -1,0 +1,6 @@
+check = "DC004-dead_structs"
+classification = "gourmand_bug"
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "DashboardHandler is passed as a class to HTTPServer(...) in main(), which instantiates it once per request. That is how http.server request handlers work; DC004 only counts direct Name() calls."

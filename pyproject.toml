@@ -1,0 +1,16 @@
+# Lint configuration only. factory is two stdlib-only scripts copied into the
+# image by the Containerfile; nothing here is built or installed as a package.
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["validate-constitution.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C90"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.per-file-ignores]
+# Every long line is inside GAME_HTML, the embedded Phaser page served verbatim.
+"factory-dashboard.py" = ["E501"]

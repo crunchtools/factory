@@ -1,0 +1,6 @@
+check = "EV002-manifest_lint_suppression"
+classification = "by_design"
+
+[[locations]]
+path = "pyproject.toml"
+justification = "The only E501 lines in factory-dashboard.py are inside GAME_HTML, the Phaser page served verbatim from a string literal. Wrapping the embedded JS/CSS to 100 columns would change the served page for no benefit; every Python line in the file still meets the limit."

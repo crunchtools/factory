@@ -1,0 +1,10 @@
+check = "EV013-hidden_env_config"
+classification = "by_design"
+
+[[locations]]
+path = "factory-watchdog.py"
+justification = "STATUS_FILE (default /data/factory-status.json) is documented with its default in deploy/factory.env.example and passed through by factory-watchdog.service's PassEnvironment. The dashboard reads the same variable so both sides agree on the file Nagios alerts on."
+
+[[locations]]
+path = "factory-dashboard.py"
+justification = "STATUS_FILE (default /data/factory-status.json) and DASHBOARD_PORT (default 8095) are both documented with their defaults in deploy/factory.env.example. EV013 matches names against a fixed allowlist and cannot see that file."

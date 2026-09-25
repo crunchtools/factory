@@ -1,0 +1,18 @@
+# Gourmand configuration (AI slop detection)
+# See https://gitlab.com/mattdm/gourmand for documentation
+
+[global]
+excluded_paths = [
+    ".git/**",
+    ".ruff_cache/**",
+    ".gourmand-cache/**",
+    ".github/**",
+]
+
+[checks]
+
+[severity]
+
+[output]
+format = "text"
+color = true
