@@ -39,9 +39,12 @@ import socket
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from http import HTTPStatus
 from pathlib import Path
 
 GITHUB_ORG = os.environ.get("GITHUB_ORG", "crunchtools")
@@ -277,7 +280,7 @@ def get_github_release_version(repo: str) -> str | None:
 _GETADDRINFO = socket.getaddrinfo
 
 
-def fetch_json(url: str, timeout: int = 15):
+def fetch_json(url: str, timeout: int = 15, headers: dict[str, str] | None = None):
     """GET a JSON document, resolving the host to IPv4 only.
 
     The factory host advertises IPv6 but cannot route it. pypi.org publishes
@@ -292,8 +295,14 @@ def fetch_json(url: str, timeout: int = 15):
     api.github.com publishes no AAAA record at all, which is why the several
     hundred `gh` calls were never affected and the stall looked like GitHub
     latency rather than what it was.
+
+    :param headers: extra request headers, merged over the default Accept
+        header (e.g. a registry bearer token).
+    :return: the parsed JSON body (a dict or list).
     """
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    req = urllib.request.Request(
+        url, headers={"Accept": "application/json", **(headers or {})}
+    )
 
     def ipv4_only(host, port, family=0, *args, **kwargs):
         kwargs.pop("family", None)
@@ -337,24 +346,64 @@ def get_quay_latest_tag(repo: str) -> str | None:
         return None
 
 
+GHCR_PAGE = 1000
+
+
+def _ghcr_tags(repo: str) -> list[str]:
+    """Every tag of a ghcr.io image, paging with the registry's `last` cursor.
+
+    :param repo: image name under GITHUB_ORG.
+    :return: tag names; raises on any registry error.
+    """
+    token = fetch_json(
+        f"https://ghcr.io/token?scope=repository:{GITHUB_ORG}/{repo}:pull"
+    )["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    tags: list[str] = []
+    last = ""
+    while True:
+        page = fetch_json(
+            f"https://ghcr.io/v2/{GITHUB_ORG}/{repo}/tags/list?n={GHCR_PAGE}{last}",
+            headers=auth,
+        )
+        batch = (page.get("tags") or []) if isinstance(page, dict) else []
+        tags.extend(batch)
+        if len(batch) < GHCR_PAGE:
+            return tags
+        last = f"&last={urllib.parse.quote(batch[-1])}"
+
+
 def get_ghcr_latest_tag(repo: str) -> str | None:
-    package_versions = gh_api(
-        f"orgs/{GITHUB_ORG}/packages/container/{repo}/versions?per_page=10"
-    )
-    if not package_versions or not isinstance(package_versions, list):
+    """Highest release tag on ghcr.io, read anonymously from the registry.
+
+    Not through the GitHub Packages REST API: that accepts only classic
+    tokens, and the watchdog runs on a fine-grained one scoped to the org
+    (RT #1514). Public images need no credential, just the registry's
+    anonymous pull token. The tag list is lexical, not newest-first, so the
+    highest version is picked numerically.
+
+    :param repo: image name under GITHUB_ORG.
+    :return: the highest X.Y.Z tag (else X.Y), or None when there is none.
+    """
+    try:
+        tags = _ghcr_tags(repo)
+    except urllib.error.HTTPError as err:
+        if err.code in (
+            HTTPStatus.UNAUTHORIZED,
+            HTTPStatus.FORBIDDEN,
+            HTTPStatus.NOT_FOUND,
+        ):
+            return None  # no image, or a private one: ghcr is optional
+        print(f"WARN: ghcr {repo}: HTTP {err.code}", file=sys.stderr)
         return None
-    for version in package_versions:
-        tags = version.get("metadata", {}).get("container", {}).get("tags", [])
-        for tag in tags:
-            name = tag.lstrip("v")
-            if re.match(r"^\d+\.\d+\.\d+$", name):
-                return name
-    for version in package_versions:
-        tags = version.get("metadata", {}).get("container", {}).get("tags", [])
-        for tag in tags:
-            name = tag.lstrip("v")
-            if re.match(r"^\d+\.\d+$", name):
-                return name
+    except (OSError, ValueError, KeyError) as err:
+        print(f"WARN: ghcr {repo}: {type(err).__name__}: {err}", file=sys.stderr)
+        return None
+    names = [t.lstrip("v") for t in tags]
+    for pattern in (r"^\d+\.\d+\.\d+$", r"^\d+\.\d+$"):
+        found = [n for n in names if re.match(pattern, n)]
+        if found:
+            return max(found, key=lambda n: tuple(int(x) for x in n.split(".")))
     return None
 
 
