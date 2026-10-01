@@ -40,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -297,6 +298,7 @@ def fetch_json(url: str, timeout: int = 15, headers: dict[str, str] | None = Non
 
     :param headers: extra request headers, merged over the default Accept
         header (e.g. a registry bearer token).
+    :return: the parsed JSON body (a dict or list).
     """
     req = urllib.request.Request(
         url, headers={"Accept": "application/json", **(headers or {})}
@@ -344,6 +346,33 @@ def get_quay_latest_tag(repo: str) -> str | None:
         return None
 
 
+GHCR_PAGE = 1000
+
+
+def _ghcr_tags(repo: str) -> list[str]:
+    """Every tag of a ghcr.io image, paging with the registry's `last` cursor.
+
+    :param repo: image name under GITHUB_ORG.
+    :return: tag names; raises on any registry error.
+    """
+    token = fetch_json(
+        f"https://ghcr.io/token?scope=repository:{GITHUB_ORG}/{repo}:pull"
+    )["token"]
+    auth = {"Authorization": f"Bearer {token}"}
+    tags: list[str] = []
+    last = ""
+    while True:
+        page = fetch_json(
+            f"https://ghcr.io/v2/{GITHUB_ORG}/{repo}/tags/list?n={GHCR_PAGE}{last}",
+            headers=auth,
+        )
+        batch = (page.get("tags") or []) if isinstance(page, dict) else []
+        tags.extend(batch)
+        if len(batch) < GHCR_PAGE:
+            return tags
+        last = f"&last={urllib.parse.quote(batch[-1])}"
+
+
 def get_ghcr_latest_tag(repo: str) -> str | None:
     """Highest release tag on ghcr.io, read anonymously from the registry.
 
@@ -352,15 +381,12 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
     (RT #1514). Public images need no credential, just the registry's
     anonymous pull token. The tag list is lexical, not newest-first, so the
     highest version is picked numerically.
+
+    :param repo: image name under GITHUB_ORG.
+    :return: the highest X.Y.Z tag (else X.Y), or None when there is none.
     """
     try:
-        token = fetch_json(
-            f"https://ghcr.io/token?scope=repository:{GITHUB_ORG}/{repo}:pull"
-        )["token"]
-        tag_list = fetch_json(
-            f"https://ghcr.io/v2/{GITHUB_ORG}/{repo}/tags/list?n=1000",
-            headers={"Authorization": f"Bearer {token}"},
-        )
+        tags = _ghcr_tags(repo)
     except urllib.error.HTTPError as err:
         if err.code in (
             HTTPStatus.UNAUTHORIZED,
@@ -371,11 +397,9 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
         print(f"WARN: ghcr {repo}: HTTP {err.code}", file=sys.stderr)
         return None
     except (OSError, ValueError, KeyError) as err:
-        print(f"WARN: ghcr {repo}: {type(err).__name__}", file=sys.stderr)
+        print(f"WARN: ghcr {repo}: {type(err).__name__}: {err}", file=sys.stderr)
         return None
-    if not isinstance(tag_list, dict):
-        return None
-    names = [t.lstrip("v") for t in tag_list.get("tags") or []]
+    names = [t.lstrip("v") for t in tags]
     for pattern in (r"^\d+\.\d+\.\d+$", r"^\d+\.\d+$"):
         found = [n for n in names if re.match(pattern, n)]
         if found:
