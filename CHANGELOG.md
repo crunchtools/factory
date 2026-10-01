@@ -26,6 +26,12 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 - The vendored `validate-constitution.py` is excluded from Gourmand; it is
   owned upstream in crunchtools/constitution.
 - Constitution now inherits crunchtools/constitution v1.17.0.
+- The ghcr version check reads tags anonymously from the registry
+  (`ghcr.io/v2/.../tags/list`) instead of the GitHub Packages REST API,
+  which accepts only classic tokens. The watchdog now runs on a
+  fine-grained token scoped to the crunchtools org (RT #1514). The highest
+  release tag is picked numerically, since the registry lists tags
+  lexically.
 
 ## [1.3.2] - 2026-09-20
 
