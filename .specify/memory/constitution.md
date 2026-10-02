@@ -1,63 +1,64 @@
 # factory Constitution
 
-> **Version:** 1.0.0
+> **Version:** 1.1.0
 > **Ratified:** 2026-03-09
+> **Amended:** 2026-10-02
 > **Status:** Active
-> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.17.0
+> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.18.0
 > **Profile:** Container Image
 
-CrunchTools fleet watchdog — monitors GHA workflow status, version sync, artifact sync, and constitution compliance across all CrunchTools repos. Writes results to /data/factory-status.json, which factory-dashboard renders and Nagios alerts on via check_factory_status.sh.
+This file holds what is specific to factory. The fleet rules and the
+Container Image profile apply at the inherited version and are checked against
+this repo's files by `constitution.yml`. They are not restated here.
 
----
+## Image Purpose
 
-## License
+CrunchTools fleet watchdog. It auto-discovers every repo in the GitHub org
+that carries a constitution and checks GHA workflow status, version and
+artifact sync, constitution validation, changelog, the Gourmand gate, GitHub
+Releases and open issues/PRs. Live service monitoring is Nagios's job;
+factory does not duplicate it. Published to `quay.io/crunchtools/factory`.
 
-AGPL-3.0-or-later
+## Status File Contract
 
-## Versioning
+Results are written to `/data/factory-status.json`. That file is both what
+`factory-dashboard` renders and what Nagios alerts on: the host bind-mounts
+the same directory and `check_factory_status.sh` reads its summary block
+directly. If its schema changes, the Nagios check changes with it.
 
-Follow Semantic Versioning 2.0.0. MAJOR/MINOR/PATCH.
+## Parent Image and Packages
 
-## Base Image
+- **Parent:** `quay.io/crunchtools/ubi10-core:latest` (systemd init), so this
+  image rebuilds when the parent does.
+- **Packages:** `python3` from UBI; `gh` from the upstream GitHub CLI RPM
+  repository. The watchdog and dashboard are stdlib-only Python, no pip
+  dependencies.
+- **Vendored validator:** `validate-constitution.py` is copied to
+  `/usr/local/lib/` and owned upstream in crunchtools/constitution; it is
+  excluded from Gourmand.
 
-`registry.access.redhat.com/ubi10/ubi-init:latest` — systemd-based for timer-driven periodic execution.
+## Services
 
-## Registry
+| Unit | Kind | Role |
+|------|------|------|
+| `factory-watchdog.timer` | timer, every 15 minutes, persistent | fires the watchdog |
+| `factory-watchdog.service` | oneshot | `/usr/local/bin/factory-watchdog` |
+| `factory-dashboard.service` | simple, restart on failure | HTTP status page on port 8095 |
 
-Published to `quay.io/crunchtools/factory`.
+## Environment
 
-## Containerfile Conventions
+`deploy/factory.env.example` documents the shape:
 
-- Uses `Containerfile` (not Dockerfile)
-- Required LABELs: `org.opencontainers.image.source`, `org.opencontainers.image.description`, `org.opencontainers.image.licenses`, `maintainer`
-- `dnf install -y --nodocs` followed by `dnf clean all`
-- systemd timer enabled: fleet-watchdog.timer (15-minute OnCalendar)
-- systemd services masked: systemd-remount-fs, systemd-update-done, systemd-udev-trigger
-- `STOPSIGNAL SIGRTMIN+3` for proper systemd shutdown
-- `ENTRYPOINT ["/sbin/init"]`
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GH_TOKEN` | required | GitHub token with read access to org repos and packages |
+| `GITHUB_ORG` | `crunchtools` | org to auto-discover repos from |
+| `STATUS_FILE` | `/data/factory-status.json` | status file path |
+| `DASHBOARD_PORT` | `8095` | dashboard listen port |
 
-## Packages Installed
+## History
 
-- python3 (from UBI repos)
-- gh CLI (from upstream GitHub RPM repo)
-
-## Runtime
-
-- Init: `/sbin/init` (systemd)
-- Timer: `fleet-watchdog.timer` (fires every 15 minutes)
-- Service: `fleet-watchdog.service` (Type=oneshot)
-- Main script: `/usr/local/bin/fleet-watchdog` (Python, stdlib only)
-- Constitution validator: `/usr/local/lib/validate-constitution.py`
-- Environment variables: `GH_TOKEN` (required), `GITHUB_ORG`, `STATUS_FILE`
-
-## Testing
-
-- **Build test**: CI builds the Containerfile on every push to main
-- **Smoke test**: Run container with `GH_TOKEN`, verify timer fires and check output in journal
-- **Security scan**: Recommended (not yet implemented)
-
-## Quality Gates
-
-1. Build — CI builds the Containerfile successfully
-2. Constitution validation — `validate-constitution.py` passes
-3. Weekly rebuild — cron job picks up base image updates every Monday 6 AM UTC
+| Version | Date | Changes |
+|---------|------|---------|
+| 1.0.0 | 2026-03-09 | Initial constitution |
+| 1.1.0 | 2026-10-02 | Manifest under constitution v1.18.0: fleet and profile restatement removed; parent image corrected to `ubi10-core`; status file contract, units and environment kept |
