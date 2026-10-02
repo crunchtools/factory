@@ -407,43 +407,40 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
     return None
 
 
-def check_artifact_sync(repo: str) -> tuple[int, str]:
+# A repo constitution that says its package is "not published to PyPI"
+# (mcp-ashigaru's Distribution Exception) waives the PyPI artifact.
+PYPI_EXEMPT_RE = re.compile(r"not\s+published\s+to\s+PyPI", re.IGNORECASE)
+
+
+def pypi_exempt(constitution: str | None) -> bool:
+    """True when the repo's constitution declares it is not on PyPI."""
+    return bool(constitution and PYPI_EXEMPT_RE.search(constitution))
+
+
+def check_artifact_sync(repo: str, pypi_required: bool = True) -> tuple[int, str]:
     """Return (1, summary) if versions match, (0, details) otherwise.
 
-    GitHub release, PyPI, and Quay are all required for MCP Servers.
+    GitHub release, PyPI, and Quay are all required for MCP Servers, except
+    PyPI when the constitution grants a distribution exception.
     Missing artifacts are a failure, not silently skipped.
     """
-    gh_ver = get_github_release_version(repo)
-    pypi_ver = get_pypi_version(repo)
-    quay_ver = get_quay_latest_tag(repo)
+    found = {
+        "github": get_github_release_version(repo),
+        "pypi": get_pypi_version(repo) if pypi_required else None,
+        "quay": get_quay_latest_tag(repo),
+    }
     ghcr_ver = get_ghcr_latest_tag(repo)
 
-    # Check for missing required artifacts
-    missing = []
-    if not gh_ver:
-        missing.append("github")
-    if not pypi_ver:
-        missing.append("pypi")
-    if not quay_ver:
-        missing.append("quay")
+    required = ["github", "pypi", "quay"] if pypi_required else ["github", "quay"]
+    missing = [name for name in required if not found[name]]
     if missing:
-        present = []
-        if gh_ver:
-            present.append(f"github={gh_ver}")
-        if pypi_ver:
-            present.append(f"pypi={pypi_ver}")
-        if quay_ver:
-            present.append(f"quay={quay_ver}")
         detail = "missing: " + ",".join(missing)
+        present = [f"{name}={ver}" for name, ver in found.items() if ver]
         if present:
             detail += " | found: " + ", ".join(present)
         return 0, detail
 
-    versions: dict[str, str] = {
-        "github": gh_ver,
-        "pypi": pypi_ver,
-        "quay": quay_ver,
-    }
+    versions: dict[str, str] = {name: ver for name, ver in found.items() if ver}
     if ghcr_ver:
         versions["ghcr"] = ghcr_ver
 
@@ -806,7 +803,7 @@ def print_result(name: str, score: int | None, detail: str) -> None:
 
 
 def run_sync_checks(repo_results: dict[str, dict], repo_names: list[str],
-                    mcp_repos: list[str]) -> None:
+                    mcp_repos: list[str], no_pypi: set[str]) -> None:
     """Checks 1-3: GHA status for every repo, version and artifact sync for MCP repos."""
     print("\n--- GHA Workflow Status ---")
     for name in repo_names:
@@ -823,7 +820,7 @@ def run_sync_checks(repo_results: dict[str, dict], repo_names: list[str],
 
     print("\n--- Artifact Sync ---")
     for name in mcp_repos:
-        score, artifact_info = check_artifact_sync(name)
+        score, artifact_info = check_artifact_sync(name, name not in no_pypi)
         print(f"  {name}: {status_label(score)} ({artifact_info})")
         repo_results[name]["artifact_sync"] = score
 
@@ -960,7 +957,8 @@ def main() -> int:
     mcp_repos = [r["name"] for r in repos if r["profile"] == "MCP Server"]
     repo_results: dict[str, dict] = {r["name"]: new_repo_result(r) for r in repos}
 
-    run_sync_checks(repo_results, repo_names, mcp_repos)
+    no_pypi = {r["name"] for r in repos if pypi_exempt(r.get("constitution"))}
+    run_sync_checks(repo_results, repo_names, mcp_repos, no_pypi)
     run_compliance_checks(repo_results, repos)
     run_count_checks(repo_results, repo_names)
 
