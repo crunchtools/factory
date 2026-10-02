@@ -8,6 +8,12 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+### Fixed
+
+- Artifact sync no longer requires PyPI for an MCP server whose constitution
+  says it is "not published to PyPI" (mcp-ashigaru's distribution exception);
+  GitHub and Quay still have to agree.
+
 ### Added
 
 - Gourmand CI gate (`.github/workflows/gourmand.yml`, gatehouse v0.9.0) and
