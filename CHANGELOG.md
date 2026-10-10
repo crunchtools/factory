@@ -10,6 +10,10 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ### Fixed
 
+- The bundled `validate-constitution.py` is the constitution v1.23.0 copy. The
+  old copy predated v1.19.0 and reported the Security Gateway and Workflow
+  Automation profiles as unknown, which would have turned the constitution
+  dimension red for any repo declaring one (ashigaru, since its v2.0.0).
 - Artifact sync no longer requires PyPI for an MCP server whose constitution
   says it is "not published to PyPI" (mcp-ashigaru's distribution exception);
   GitHub and Quay still have to agree.

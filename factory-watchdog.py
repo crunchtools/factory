@@ -408,7 +408,7 @@ def get_ghcr_latest_tag(repo: str) -> str | None:
 
 
 # A repo constitution that says its package is "not published to PyPI"
-# (mcp-ashigaru's Distribution Exception) waives the PyPI artifact.
+# (a Distribution Exception) waives the PyPI artifact.
 PYPI_EXEMPT_RE = re.compile(r"not\s+published\s+to\s+PyPI", re.IGNORECASE)
 
 

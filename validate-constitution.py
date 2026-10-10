@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import tomllib
 import urllib.request
@@ -672,7 +673,15 @@ PROFILES_ADDED_IN_MANIFEST = {
     "Governance",
     "Package Repository",
     "Data Archive",
+    "Security Gateway",
+    "Workflow Automation",
 }
+VALIDATED_AT_MAIN = ("1.18.0", "1.19.0")
+"""Releases whose validate.yml checks out main instead of its own tag (#42).
+
+A repo pinned to one of them reaches this validator whatever it inherits, so
+for those two an Inherits older than the validator is not a violation; the
+workflow check still holds their pin and Inherits together."""
 MANIFEST_HEADER = ("Version", "Ratified", "Status")  # beside Inherits and Profile (VII)
 VALID_PROFILES |= PROFILES_ADDED_IN_MANIFEST
 
@@ -981,6 +990,131 @@ def check_repo_files(repo_root: Path, profiles: list[str], requirements: dict) -
     return violations
 
 
+TESTS_CONTAIN_SINCE = (1, 22, 0)
+"""First constitution version with the `tests_contain` requirement."""
+
+
+def check_tests_contain(
+    repo_root: Path, inherits: str, profiles: list[str], requirements: dict
+) -> list[str]:
+    """Since 1.22.0: each profile's `tests_contain` regex matches in some test file.
+
+    Version-gated because the drift report judges every repo with main's
+    requirements, whatever release the repo inherits. A match is a tripwire,
+    not proof: it says the test the profile asks for was written, not that it
+    is right.
+    """
+    if (version_tuple(inherits) or ()) < TESTS_CONTAIN_SINCE:
+        return []
+    missing = [
+        pattern
+        for profile in profiles
+        for pattern in requirements.get("profile", {}).get(profile, {}).get("tests_contain", [])
+    ]
+    for path in repo_root.glob("test*/**/*.py"):
+        if not missing:
+            break
+        if path.is_file():
+            text = path.read_text(errors="ignore")
+            missing = [pattern for pattern in missing if not re.search(pattern, text)]
+    return [f"TESTS: no file under test*/ matches `{pattern}`" for pattern in missing]
+
+
+HOST_CONTRACT_SINCE = (1, 20, 0)
+"""First constitution version whose XII states the host contract."""
+HOST_LANGUAGES = {"system", "unsupported"}  # pre-commit 4.4 renamed system to unsupported
+SHELLS = {"bash", "sh"}
+COMMAND_BOUNDARIES = {"|", "||", "&&", ";", "&", "(", ")", "|&", ";;"}
+# Words a command may follow, and builtins, which take their own arguments.
+# Neither needs a host install; everything else a hook names does.
+SHELL_PREFIXES = {"!", "{", "}", "command", "do", "done", "elif", "else", "exec", "fi", "if"}
+SHELL_PREFIXES |= {"then", "time", "until", "while"}
+SHELL_BUILTINS = {":", "[", "[[", "cd", "echo", "exit", "export", "false", "for", "printf", "set"}
+SHELL_BUILTINS |= {"shift", "test", "trap", "true", "unset"}
+
+SUBSTITUTION = re.compile(r"\$\(([^()]+)\)|`([^`]+)`")
+
+
+def host_commands(entry: str) -> list[str]:
+    """The programs a `language: system` hook entry starts, in order.
+
+    Follows `bash -c '...'` into the quoted script and splits on pipes and
+    lists, so `bash -c 'git diff --cached | podman run ...'` yields git and
+    podman. Shell builtins, keywords and `VAR=value` prefixes are not programs.
+    A newline ends a command, and `$(...)` or backticks are read wherever they
+    sit, quoted or as a builtin's argument. Not a shell parser: it errs toward
+    naming a program. Raises ValueError on unbalanced quotes.
+    """
+    commands: list[str] = []
+    for substitution in SUBSTITUTION.findall(entry):
+        commands += host_commands("".join(substitution))
+    lexer = shlex.shlex(re.sub(r"(?<!\\)\n", " ; ", entry), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    words: list[str] = []
+    for token in [*lexer, ";"]:
+        if token not in COMMAND_BOUNDARIES:
+            words.append(token)
+            continue
+        while words and (words[0] in SHELL_PREFIXES or re.match(r"^\w+=", words[0])):
+            words.pop(0)
+        if words and words[0] in SHELL_BUILTINS:
+            words = []
+        if words and words[0] in SHELLS:
+            script = next(
+                (words[i + 1] for i, w in enumerate(words[1:-1], 1) if re.match(r"^-\w*c$", w)),
+                None,
+            )
+            # `bash lint.sh` reads the file from the repo root; say so with a path.
+            operands = [w if "/" in w else f"./{w}" for w in words[1:] if not w.startswith("-")]
+            commands += host_commands(script) if script is not None else operands[:1]
+        elif words:
+            commands.append(words[0])
+        words = []
+    return commands
+
+
+def check_host_contract(repo_root: Path, inherits: str, requirements: dict) -> list[str]:
+    """XII since 1.20.0: a hook that runs on the host uses only what the host has.
+
+    A `language: system` hook may start the host-contract tools
+    (requirements.toml `host_tools`) and scripts inside the repo, named with a
+    path as pre-commit requires. Hooks in a pre-commit-managed language are
+    not on the host. What a repo-local script does is not inspected; the rule
+    for runners is prose.
+    """
+    if (version_tuple(inherits) or ()) < HOST_CONTRACT_SINCE:
+        return []
+    config = load_yaml(repo_root / ".pre-commit-config.yaml") or {}
+    allowed = set(requirements.get("fleet", {}).get("host_tools", []))
+    root = repo_root.resolve()
+    violations: list[str] = []
+    hooks = [
+        hook
+        for source in config.get("repos") or []
+        if isinstance(source, dict)
+        for hook in source.get("hooks") or []
+        if isinstance(hook, dict) and hook.get("language") in HOST_LANGUAGES
+    ]
+    for hook in hooks:
+        try:
+            commands = host_commands(str(hook.get("entry", "")))
+        except ValueError as error:
+            violations.append(
+                f"XII: pre-commit hook `{hook.get('id')}` entry is not shell: {error}"
+            )
+            continue
+        for command in dict.fromkeys(commands):
+            local = "/" in command and (root / command).resolve().is_relative_to(root)
+            if command in allowed or (local and (root / command).is_file()):
+                continue
+            violations.append(
+                f"XII: pre-commit hook `{hook.get('id')}` runs `{command}` from the host. "
+                f"The host has only {', '.join(sorted(allowed))}: run it from a container "
+                f"image, a pre-commit-managed environment or a script in this repo"
+            )
+    return violations
+
+
 def github_api(path: str) -> dict | None:
     """GET api.github.com/<path> with $GH_TOKEN if set. None when unreachable."""
     request = urllib.request.Request(f"https://api.github.com/{path}")
@@ -1014,7 +1148,7 @@ def check_pin(inherits: str, pinned: bool) -> list[str]:
         return []
     if version_tuple(inherits) > version_tuple(mine):
         return [f"PIN: manifest inherits v{inherits}, newer than this validator (v{mine})"]
-    if pinned and inherits != mine:
+    if pinned and inherits != mine and inherits not in VALIDATED_AT_MAIN:
         return [
             f"PIN: manifest inherits v{inherits} but CI validated with v{mine}; "
             f"bump Inherits and the validate.yml pin together"
@@ -1067,8 +1201,10 @@ def validate_manifest(
     if is_repo_checkout(repo_root):
         violations += check_changelog(repo_root)
         violations += check_quality_gate_wiring(repo_root, inherits)
+        violations += check_host_contract(repo_root, inherits, requirements)
         violations += check_gate_workflows(repo_root, inherits, requirements)
         violations += check_repo_files(repo_root, profiles, requirements)
+        violations += check_tests_contain(repo_root, inherits, profiles, requirements)
         violations += check_visibility(profiles, requirements, slug)
     return violations
 
