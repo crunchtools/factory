@@ -4,7 +4,7 @@
 > **Ratified:** 2026-03-09
 > **Amended:** 2026-10-02
 > **Status:** Active
-> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.21.0
+> **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.22.0
 > **Profile:** Container Image
 
 This file holds what is specific to factory. The fleet rules and the
