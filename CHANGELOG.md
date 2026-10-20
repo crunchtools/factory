@@ -8,6 +8,16 @@ Entries prior to 2026-09-19 are back-filled from GitHub Release notes (RT #1484)
 
 ## [Unreleased]
 
+### Removed
+
+- Decommissioned 2026-10-20. The watchdog spent ~1,300 GitHub REST calls per
+  15-minute run (~5,200/hr), more than the 5,000/hr budget on the token it
+  shared, and its checks are covered elsewhere: constitution, changelog and
+  Gourmand-gate validation by per-repo CI and constitution's weekly
+  fleet-drift; releases and open issues/PRs by Ashigaru and the weekend
+  report; image drift by Nagios; red default branches by Ashigaru's inbox.
+  The repository is archived.
+
 ### Fixed
 
 - The bundled `validate-constitution.py` is the constitution v1.23.0 copy. The
