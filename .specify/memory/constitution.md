@@ -2,10 +2,13 @@
 
 > **Version:** 1.1.0
 > **Ratified:** 2026-03-09
-> **Amended:** 2026-10-02
-> **Status:** Active
+> **Amended:** 2026-10-20
+> **Status:** Decommissioned (2026-10-20; repository archived)
 > **Inherits:** [crunchtools/constitution](https://github.com/crunchtools/constitution) v1.24.0
 > **Profile:** Container Image
+
+factory.crunchtools.com was decommissioned on 2026-10-20 and nothing runs this image. The requirements below
+record the service as it ran; see CHANGELOG.md for where its checks went.
 
 This file holds what is specific to factory. The fleet rules and the
 Container Image profile apply at the inherited version and are checked against
